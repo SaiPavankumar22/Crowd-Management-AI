@@ -22,7 +22,13 @@ import supervision as sv
 
 from . import config, store
 from .alerting import AlertEngine
+from .calibration import polygon_area_world
+from .decoder import open_capture
+from .delivery import AlertDispatcher
 from .heatmap import HeatmapAccumulator
+from .health import FrameHealth
+from . import metrics
+from .scheduler import InferenceScheduler
 from .zones import SEVERITY, Zone, level_for
 
 BOX_COLOR = (248, 189, 56)  # #38bdf8 (BGR)
@@ -43,6 +49,7 @@ class CameraWorker(threading.Thread):
         self._stop_event = threading.Event()
 
         self.zones: list[Zone] = [self._zone(z) for z in cam.get("zones", [])]
+        self.calibration = cam.get("calibration")
         self.engine = AlertEngine(cam["id"], cam["name"],
                                   config.DEFAULT_ALERT_SUSTAIN_S,
                                   config.DEFAULT_ALERT_COOLDOWN_S)
@@ -60,6 +67,8 @@ class CameraWorker(threading.Thread):
         self._infer_ts = deque(maxlen=24)
         self._frames_total = 0
         self.total_count = 0.0
+        self.frame_health = FrameHealth()
+        self.decoder = config.DECODER
 
     # ------------------------------------------------------------------ #
     def _zone(self, d: dict) -> Zone:
@@ -107,6 +116,8 @@ class CameraWorker(threading.Thread):
             t0 = time.time()
             ok, frame = cap.read()
             if not ok:
+                self.frame_health.decode_failed()
+                metrics.inc("godavari_decode_failures_total")
                 if not is_live:
                     if config.LOOP_FILE_SOURCES:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -131,6 +142,8 @@ class CameraWorker(threading.Thread):
                 cap = recovered
                 continue
 
+            self.frame_health.frame_received(frame)
+            metrics.inc("godavari_frames_total")
             if frame.shape[1] > config.MAX_FRAME_WIDTH:
                 scale = config.MAX_FRAME_WIDTH / frame.shape[1]
                 frame = cv2.resize(frame, (config.MAX_FRAME_WIDTH,
@@ -160,12 +173,12 @@ class CameraWorker(threading.Thread):
                 src = int(str(self.cam["path"]).strip() or "0")
             except ValueError:
                 return None
-        cap = cv2.VideoCapture(src)
+        cap, backend = open_capture(src)
+        self.decoder = backend
+        if cap is None:
+            return None
         if self.cam["source_type"] == "rtsp":
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        if not cap.isOpened():
-            cap.release()
-            return None
         return cap
 
     def _process(self, frame: np.ndarray):
@@ -173,7 +186,7 @@ class CameraWorker(threading.Thread):
         now = time.time()
         self._infer_ts.append(now)
 
-        boxes, confs = self.model.detect(frame)
+        boxes, confs = self.registry.scheduler.infer(self.cam["id"], frame)
         dets = sv.Detections(
             xyxy=boxes, confidence=confs,
             class_id=np.zeros(len(boxes), dtype=int),
@@ -188,6 +201,15 @@ class CameraWorker(threading.Thread):
             feet = np.stack([(boxes[:, 0] + boxes[:, 2]) * 0.5, boxes[:, 3]], axis=1)
         else:
             feet = np.zeros((0, 2), np.float32)
+        tracked_feet = []
+        tracked_ids = []
+        if len(tracks) and len(track_ids):
+            for i, tid in enumerate(track_ids):
+                if int(tid) >= 0:
+                    tracked_ids.append(int(tid))
+                    x1, _y1, x2, y2 = tracks.xyxy[i]
+                    tracked_feet.append(((x1 + x2) * 0.5, y2))
+        tracked_feet = np.asarray(tracked_feet, dtype=np.float32).reshape(-1, 2)
 
         # ---- flow: per-track velocity from the previous inference tick ----
         tpoints = []  # (track_id, foot_x_px, foot_y_px)
@@ -222,7 +244,9 @@ class CameraWorker(threading.Thread):
             poly = (np.asarray(zone.polygon, np.float32) * [w, h]).astype(np.int32)
             area = cv2.contourArea(poly)
             inside = 0
-            for p in feet:
+            # Occupancy is based on unique active track IDs rather than raw
+            # detections, so repeated detections do not inflate the count.
+            for p in tracked_feet:
                 if cv2.pointPolygonTest(poly, (float(p[0]), float(p[1])), False) >= 0:
                     inside += 1
             vx = vy = 0.0
@@ -248,14 +272,22 @@ class CameraWorker(threading.Thread):
                 if abs(vx) + abs(vy) < 0.003:
                     vx = vy = 0.0
             self._zone_flow[zone.id] = (vx, vy)
-            zone.apply_count(inside, area)
+            area_m2 = None
+            if self.calibration:
+                world_poly = np.asarray(zone.polygon, np.float32) * [w, h]
+                area_m2 = polygon_area_world(world_poly, self.calibration)
+            zone.apply_count(inside, area, area_m2)
             for alert in self.engine.update(zone):
                 store.add_alert(alert)
                 self.registry.push_alert(alert)
+                self.registry.dispatch_alert(alert)
             zone_results.append({
                 "id": zone.id, "name": zone.name, "capacity": zone.capacity,
                 "count": int(round(zone.count)), "occupancy_pct": round(zone.occupancy_pct, 1),
-                "density_per_10k": round(zone.density_per_10k, 1), "level": zone.level,
+                "density_per_10k": round(zone.density_per_10k, 1),
+                "density_m2": round(zone.density_m2, 2)
+                if zone.density_m2 is not None else None,
+                "level": zone.level,
                 "flow": [round(vx, 4), round(vy, 4)], "moving": moving,
             })
 
@@ -277,6 +309,8 @@ class CameraWorker(threading.Thread):
                 "infer_fps": self._rolling_infer_fps(),
                 "frames": self._frames_total,
                 "count": total,
+                "tracked_count": n_tracks,
+                "raw_detection_count": total,
                 "count_smooth": int(round(self.total_count)),
                 "active_tracks": n_tracks,
                 "zones_defined": len(zones),
@@ -286,6 +320,9 @@ class CameraWorker(threading.Thread):
                 "zones": zone_results,
                 "frame_size": [w, h],
                 "heatmap": self.heatmap.encode(),
+                "health": self.frame_health.snapshot(),
+                "decoder": self.decoder,
+                "estimation_mode": "detector",
             }
 
     def _rolling_infer_fps(self) -> float:
@@ -320,10 +357,12 @@ class CameraWorker(threading.Thread):
 class CameraRegistry:
     def __init__(self, model):
         self.model = model
+        self.scheduler = InferenceScheduler(model)
         self._lock = threading.Lock()
         self.cameras: dict[str, dict] = {}
         self.workers: dict[str, CameraWorker] = {}
         self.alerts: deque = deque(maxlen=200)
+        self.dispatcher = AlertDispatcher()
         # Read the saved cameras immediately. Waiting until the model has loaded
         # meant an API call in those first seconds (add/delete/zone edit) saved a
         # registry that had not been restored yet, wiping cameras.json.
@@ -376,20 +415,30 @@ class CameraRegistry:
             items = list(self.cameras.items())
         for cam_id, cam in items:
             worker = self.workers.get(cam_id)
-            status = (worker.metrics.get("status", "stopped") if worker else "stopped")
+            metrics_snapshot = worker.metrics if worker else None
+            status = (metrics_snapshot.get("status", "stopped")
+                      if metrics_snapshot else "stopped")
+            health_status = (metrics_snapshot or {}).get("health", {}).get("status")
+            if status == "running" and health_status in {
+                "stale", "frozen", "dark", "low_contrast", "blurry"
+            }:
+                status = "degraded"
             out.append({
                 "id": cam_id,
                 "name": cam["name"],
                 "source_type": cam["source_type"],
                 "zones": cam.get("zones", []),
                 "status": status,
-                "detail": (worker.metrics.get("detail") if worker else None),
-                "metrics": (worker.metrics if worker else None),
+                "detail": (metrics_snapshot.get("detail") if metrics_snapshot else None),
+                "metrics": metrics_snapshot,
             })
         return out
 
     def push_alert(self, alert: dict):
         self.alerts.append(alert)
+
+    def dispatch_alert(self, alert: dict):
+        self.dispatcher.dispatch(alert)
 
     def recent_alerts(self, limit: int = 60) -> list[dict]:
         data = list(self.alerts)[-limit:]

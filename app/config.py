@@ -68,4 +68,25 @@ DEFAULT_ALERT_COOLDOWN_S = float(os.environ.get("CROWD_ALERT_COOLDOWN", "60"))
 WS_PERIOD_S = float(os.environ.get("CROWD_WS_PERIOD", "0.6"))
 STREAM_FPS = int(os.environ.get("CROWD_STREAM_FPS", "12"))
 
+# --- Reliability / quality -----------------------------------------------
+FRAME_STALE_S = float(os.environ.get("CROWD_FRAME_STALE_S", "8"))
+FROZEN_FRAME_S = float(os.environ.get("CROWD_FROZEN_FRAME_S", "10"))
+QUALITY_SAMPLE_PERIOD_S = float(os.environ.get("CROWD_QUALITY_SAMPLE_PERIOD_S", "1"))
+MIN_BRIGHTNESS = float(os.environ.get("CROWD_MIN_BRIGHTNESS", "12"))
+MIN_CONTRAST = float(os.environ.get("CROWD_MIN_CONTRAST", "8"))
+MIN_BLUR_SCORE = float(os.environ.get("CROWD_MIN_BLUR_SCORE", "18"))
+
+# --- Inference / decoding -------------------------------------------------
+BATCH_SIZE = int(os.environ.get("CROWD_BATCH_SIZE", "1"))
+MAX_BATCH_WAIT_MS = float(os.environ.get("CROWD_MAX_BATCH_WAIT_MS", "8"))
+FRAME_QUEUE_SIZE = int(os.environ.get("CROWD_FRAME_QUEUE_SIZE", "2"))
+DECODER = os.environ.get("CROWD_DECODER", "auto").lower()
+
+# --- Alerts / calibration -------------------------------------------------
+WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
+WEBHOOK_SECRET = os.environ.get("ALERT_WEBHOOK_SECRET", "").strip()
+WEBHOOK_TIMEOUT_S = float(os.environ.get("ALERT_WEBHOOK_TIMEOUT_S", "5"))
+WEBHOOK_RETRIES = int(os.environ.get("ALERT_WEBHOOK_RETRIES", "3"))
+CALIBRATION_ENABLED = env_bool("CROWD_CALIBRATION_ENABLED", True)
+
 VIDEO_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".mpg", ".wmv")

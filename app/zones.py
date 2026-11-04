@@ -34,10 +34,11 @@ class Zone:
         self.raw_count = 0
         self.occupancy_pct = 0.0
         self.density_per_10k = 0.0  # persons per 10,000 px^2 of zone area
+        self.density_m2 = None
         self.level = "OK"
         self._first = True
 
-    def apply_count(self, raw_count: int, area_px: float):
+    def apply_count(self, raw_count: int, area_px: float, area_m2: float | None = None):
         if self._first:
             self.count = float(raw_count)
             self._first = False
@@ -46,6 +47,9 @@ class Zone:
         self.raw_count = raw_count
         self.occupancy_pct = 100.0 * self.count / max(1, self.capacity)
         self.density_per_10k = raw_count / (max(1.0, area_px) / 10000.0)
+        self.density_m2 = (
+            raw_count / area_m2 if area_m2 is not None and area_m2 > 0 else None
+        )
         self.level = level_for(self.occupancy_pct, self.warn_pct)
 
     def to_dict(self) -> dict:
@@ -64,6 +68,7 @@ class Zone:
             "raw_count": self.raw_count,
             "occupancy_pct": round(self.occupancy_pct, 1),
             "density_per_10k": round(self.density_per_10k, 1),
+            "density_m2": round(self.density_m2, 2) if self.density_m2 is not None else None,
             "level": self.level,
         }
         return d

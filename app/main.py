@@ -6,10 +6,11 @@ import urllib.parse
 
 from fastapi import (FastAPI, HTTPException, Request, UploadFile, WebSocket,
                      WebSocketDisconnect)
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, ingest
+from . import config, ingest, metrics
+from .calibration import validate_calibration
 from .detector import ModelManager
 from .pipeline import CameraRegistry, new_camera_id
 
@@ -142,6 +143,24 @@ async def list_cameras():
     return registry.snapshot()
 
 
+@app.get("/api/cameras/{cam_id}/diagnostics")
+async def camera_diagnostics(cam_id: str):
+    worker = registry.workers.get(cam_id)
+    if worker is None:
+        raise HTTPException(404, "camera not running")
+    metrics_snapshot = dict(worker.metrics)
+    return {
+        "camera_id": cam_id,
+        "status": metrics_snapshot.get("status"),
+        "health": metrics_snapshot.get("health"),
+        "decoder": getattr(worker, "decoder", "unknown"),
+        "frames": metrics_snapshot.get("frames", 0),
+        "infer_fps": metrics_snapshot.get("infer_fps", 0),
+        "frame_size": metrics_snapshot.get("frame_size"),
+        "model": model.info(),
+    }
+
+
 @app.get("/api/cameras/{cam_id}")
 async def get_camera(cam_id: str):
     for cam in registry.snapshot():
@@ -236,6 +255,69 @@ async def system_endpoint():
     return system_info()
 
 
+@app.get("/api/models")
+async def list_models():
+    return {
+        "active": model.name,
+        "available": list(dict.fromkeys(model.requested)),
+        "device": model.info()["device"],
+    }
+
+
+@app.put("/api/models")
+async def switch_model(request: Request):
+    try:
+        body = await request.json()
+        name = str(body.get("name", "")).strip()
+    except Exception:
+        raise HTTPException(400, "body must be JSON: {\"name\": \"model.pt\"}")
+    if not name or name not in model.requested:
+        raise HTTPException(400, "model must be one of the configured available models")
+    try:
+        return await asyncio.to_thread(model.switch, name)
+    except Exception as exc:
+        raise HTTPException(503, f"model switch failed: {exc}")
+
+
+@app.get("/api/health")
+async def health_endpoint():
+    cameras = registry.snapshot()
+    unhealthy = [
+        c["id"] for c in cameras
+        if c.get("metrics", {}).get("health", {}).get("status")
+        in {"stale", "frozen", "dark", "low_contrast", "blurry"}
+    ]
+    return {
+        "status": "degraded" if unhealthy else "healthy",
+        "cameras": len(cameras),
+        "unhealthy_cameras": unhealthy,
+        "model_loaded": bool(model.model is not None),
+    }
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    return Response(metrics.render(), media_type="text/plain; version=0.0.4")
+
+
+@app.put("/api/cameras/{cam_id}/calibration")
+async def put_calibration(cam_id: str, request: Request):
+    cam = registry.get(cam_id)
+    if cam is None:
+        raise HTTPException(404, "camera not found")
+    try:
+        data = await request.json()
+        calibration = validate_calibration(data)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, f"invalid calibration: {exc}")
+    cam["calibration"] = calibration
+    worker = registry.workers.get(cam_id)
+    if worker:
+        worker.calibration = calibration
+    registry.save()
+    return {"ok": True, "calibration": calibration}
+
+
 @app.get("/api/alerts/export")
 async def export_alerts(limit: int = 500):
     rows = store_recent_alerts(limit)
@@ -249,6 +331,5 @@ async def export_alerts(limit: int = 500):
             r["level"],
             '"' + str(r["message"]).replace('"', '""') + '"',
         ]))
-    from fastapi.responses import Response
     return Response("\n".join(lines), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=alerts.csv"})
