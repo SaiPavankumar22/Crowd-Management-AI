@@ -374,11 +374,12 @@ function renderCams() {
     const m = cam.metrics || {};
     const sel = cam.id === state.selectedId ? "sel" : "";
     const lvl = m.level || "";
+    const health = (m.health && m.health.status) || "unknown";
     return `<div class="cam-item ${sel}" data-id="${cam.id}">
-      <i class="dot ${esc(cam.status)}"></i>
+      <i class="dot ${esc(cam.status)}" title="input: ${esc(health)}"></i>
       <div style="min-width:0">
         <div class="name">${esc(cam.name)}</div>
-        <div class="meta"><b>${m.count ?? 0}</b> ppl · ${esc(cam.status)}</div>
+        <div class="meta"><b>${m.count ?? 0}</b> ppl · ${esc(cam.status)} · ${esc(health)}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         ${lvl ? `<span class="lvl ${lvl}">${lvl}</span>` : ""}
@@ -407,7 +408,9 @@ function renderStage() {
 
   $("cam-title").textContent = cam ? cam.name : "No camera selected";
   $("cam-sub").textContent = cam
-    ? `${String(cam.source_type || "").toUpperCase()} · ${cam.status}${cam.detail ? " · " + cam.detail : ""}`
+    ? `${String(cam.source_type || "").toUpperCase()} · ${cam.status} · ${
+      (m.health && m.health.status) || "health unknown"
+    }${cam.detail ? " · " + cam.detail : ""}`
     : "Add a source to begin monitoring";
   $("st-dot").className = "dot " + (cam ? cam.status : "");
 

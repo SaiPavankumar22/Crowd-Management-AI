@@ -222,11 +222,20 @@ Every setting is an environment variable; nothing needs editing in code.
 | `CROWD_JPEG_QUALITY` | `65` | Quality of the annotated stream |
 | `CROWD_STREAM_FPS` | `12` | MJPEG stream frame rate |
 | `CROWD_WS_PERIOD` | `0.6` | Seconds between dashboard snapshots |
+| `CROWD_FRAME_STALE_S` | `8` | Seconds before a camera is considered stale |
+| `CROWD_FROZEN_FRAME_S` | `10` | Seconds of unchanged pixels before frozen status |
+| `CROWD_DECODER` | `auto` | Decoder backend: auto, opencv, ffmpeg, gstreamer or nvdec |
+| `CROWD_BATCH_SIZE` | `1` | Maximum inference micro-batch size |
+| `CROWD_MAX_BATCH_WAIT_MS` | `8` | Maximum scheduler wait before dispatching a batch |
+| `CROWD_FRAME_QUEUE_SIZE` | `2` | Bounded inference queue size |
 | `CROWD_LOOP` | `1` | Loop file sources |
 | `CROWD_WARN_PCT` | `75` | Zone warning level (% of capacity) |
 | `CROWD_ZONE_CAPACITY` | `100` | Capacity given to auto-created zones |
 | `CROWD_ALERT_SUSTAIN` | `5` | Seconds at ≥100 % before a capacity alert |
 | `CROWD_ALERT_COOLDOWN` | `60` | Minimum seconds between repeat alerts for one zone |
+| `ALERT_WEBHOOK_URL` | empty | Optional JSON webhook for alert delivery |
+| `ALERT_WEBHOOK_SECRET` | empty | Optional HMAC-SHA256 signing secret |
+| `ALERT_WEBHOOK_RETRIES` | `3` | Webhook delivery attempts |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address (`0.0.0.0` inside Docker) |
 | `CROWD_DATA_DIR` | `./data` | `cameras.json`, `crowd.db` (dev scripts and Docker point this at `.data/data`) |
 | `CROWD_UPLOADS_DIR` | `./uploads` | Uploaded clips |
@@ -244,6 +253,7 @@ NOC dashboard can drive it.
 | `GET` | `/api/cameras` | All cameras with live metrics |
 | `POST` | `/api/cameras` | Add one: multipart `file=`, or form `sample=` / `source=`, plus `name=`, `loop=` |
 | `GET` | `/api/cameras/{id}` | One camera |
+| `GET` | `/api/cameras/{id}/diagnostics` | Camera health, decoder and timing diagnostics |
 | `DELETE` | `/api/cameras/{id}` | Stop and remove |
 | `PUT` | `/api/cameras/{id}/zones` | Replace zones: `{"zones":[{name, polygon, capacity, warn_pct}]}` |
 | `GET` | `/api/cameras/{id}/stream` | Annotated MJPEG stream |
@@ -252,6 +262,11 @@ NOC dashboard can drive it.
 | `GET` | `/api/alerts?limit=100` | Persisted alert history |
 | `GET` | `/api/alerts/export` | Alert history as CSV |
 | `GET` | `/api/system` | Model, device, torch/CUDA, uptime, counters |
+| `GET` | `/api/health` | Service and camera health summary |
+| `GET` | `/metrics` | Prometheus-compatible process metrics |
+| `GET` | `/api/models` | Available and active models |
+| `PUT` | `/api/models` | Switch between configured models |
+| `PUT` | `/api/cameras/{id}/calibration` | Save ground-plane calibration points |
 | `WS` | `/ws` | Full snapshot (cameras + alerts + system) at `CROWD_WS_PERIOD` |
 
 ```bash
