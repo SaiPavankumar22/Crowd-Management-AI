@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="theme-color" content="#05070d"/>
+<title>Godavari · Crowd Intelligence</title>
+<link rel="icon" href="data:,"/>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<div class="ambient"></div>
+<div class="grain"></div>
+
+<!-- ============================ TOP BAR ============================ -->
+<header class="topbar">
+  <div class="brand">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M16 3l11 6.4v13.2L16 29 5 22.6V9.4L16 3z" stroke="url(#g1)" stroke-width="1.4"/>
+        <path d="M16 9.5l5.6 3.2v6.6L16 22.5l-5.6-3.2v-6.6L16 9.5z" stroke="url(#g1)" stroke-width="1.1" opacity=".65"/>
+        <circle cx="16" cy="16" r="2.1" fill="#22d3ee"/>
+        <defs><linearGradient id="g1" x1="5" y1="3" x2="27" y2="29">
+          <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#818cf8"/>
+        </linearGradient></defs>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>GODAVARI</h1>
+      <span>Crowd Intelligence Platform</span>
+    </div>
+  </div>
+
+  <div class="topbar-mid">
+    <div class="live-pill" id="live-pill"><i></i><span>LIVE</span></div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <div class="topmeta" id="topmeta"></div>
+</header>
+
+<!-- ============================= SHELL ============================= -->
+<main class="shell">
+  <!-- ---------------------------- LEFT ---------------------------- -->
+  <aside class="rail rail-left">
+    <section class="card">
+      <div class="card-head">
+        <h2>Camera sources</h2>
+        <button id="btn-add" class="btn ghost sm" title="Add a camera">+ Add</button>
+      </div>
+      <div id="cam-list" class="cam-list"></div>
+    </section>
+
+    <section class="card hidden" id="add-dialog">
+      <div class="card-head"><h2>New source</h2><button class="x" id="btn-add-close">✕</button></div>
+      <label class="fld">Name <input id="cam-name" placeholder="Ghat 1 — main approach"/></label>
+      <div class="tabs">
+        <button class="tab on" data-mode="upload">Upload</button>
+        <button class="tab" data-mode="sample">Sample</button>
+        <button class="tab" data-mode="source">RTSP</button>
+      </div>
+      <div id="pane-upload" class="pane">
+        <label class="drop" id="drop">
+          <input type="file" id="file-input" accept="video/*"/>
+          <span class="drop-ico">⇪</span>
+          <b>Choose crowd footage</b>
+          <small>mp4 · avi · mov · mkv &nbsp;—&nbsp; or drop a file</small>
+          <em id="file-label"></em>
+        </label>
+        <label class="chk"><input type="checkbox" id="loop-input" checked/> Loop playback</label>
+      </div>
+      <div id="pane-sample" class="pane hidden">
+        <select id="sample-select"></select>
+      </div>
+      <div id="pane-source" class="pane hidden">
+        <input id="source-input" placeholder="rtsp://user:pass@ip:554/stream  ·  or  0"/>
+      </div>
+      <div class="row-end">
+        <span id="add-progress" class="muted sm"></span>
+        <button id="btn-start" class="btn primary">Start monitoring</button>
+      </div>
+    </section>
+
+    <section class="card sys">
+      <div class="card-head"><h2>Engine</h2><span class="pill" id="engine-state">…</span></div>
+      <dl class="kv" id="sys-kv"></dl>
+    </section>
+  </aside>
+
+  <!-- --------------------------- CENTER --------------------------- -->
+  <section class="rail rail-mid">
+    <div class="card stage-card">
+      <div class="stage-head">
+        <div class="cam-id">
+          <i class="dot" id="st-dot"></i>
+          <div class="cam-id-text">
+            <h2 id="cam-title">No camera selected</h2>
+            <span class="sub" id="cam-sub">Add a source to begin monitoring</span>
+          </div>
+        </div>
+        <div class="stage-tools">
+          <div class="seg" id="view-seg">
+            <button data-view="live" class="on">Live</button>
+            <button data-view="wall">Wall</button>
+          </div>
+          <button class="tgl on" data-ov="heatmap" title="Heatmap (H)">Heatmap</button>
+          <button class="tgl on" data-ov="zones" title="Zones (Z)">Zones</button>
+          <button class="tgl on" data-ov="flow" title="Flow (F)">Flow</button>
+        </div>
+      </div>
+
+      <div class="stage" id="stage">
+        <img id="feed" alt=""/>
+        <canvas id="overlay"></canvas>
+
+        <div class="hud hud-tl">
+          <div class="hud-count">
+            <b id="hud-count">0</b>
+            <span>people in frame</span>
+          </div>
+        </div>
+        <div class="hud hud-tr">
+          <span class="lvl" id="hud-level">IDLE</span>
+          <span class="hud-fps" id="hud-fps">0 fps</span>
+        </div>
+        <div class="hud hud-bl">
+          <span class="hud-src" id="hud-src">—</span>
+        </div>
+
+        <div class="stage-empty" id="stage-empty">
+          <div class="se-icon">◉</div>
+          <h3>Waiting for a source</h3>
+          <p>Add a camera on the left — upload crowd footage, use the bundled sample, or point at an RTSP stream.</p>
+        </div>
+        <div id="draw-hint" class="draw-hint hidden">
+          Click on the frame to place polygon points · <b>Finish</b> closes the loop · <b>Esc</b> cancels
+        </div>
+        <div class="flush" id="flush"></div>
+      </div>
+
+      <div class="wall-wrap hidden" id="wall-wrap">
+        <div class="wall" id="wall"></div>
+      </div>
+
+      <div class="stage-foot">
+        <div class="toolgroup">
+          <label class="switch"><input type="checkbox" id="chk-draw"/><span></span>Draw zone</label>
+          <button id="btn-grid" class="btn ghost sm">Auto-grid</button>
+          <button id="btn-clear-zones" class="btn ghost sm">Clear zones</button>
+          <button id="btn-del-cam" class="btn ghost sm danger">Remove source</button>
+        </div>
+        <div id="new-zone-form" class="newzone hidden">
+          <input id="zone-name" placeholder="Zone name" size="12"/>
+          <input id="zone-cap" type="number" min="1" value="20" title="capacity (people)"/>
+          <button id="btn-finish" class="btn primary sm">Finish zone</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card trend-card">
+      <div class="card-head">
+        <h2>Occupancy trend</h2>
+        <div class="legend">
+          <span><i class="lg lg-a"></i>people, all sources</span>
+          <span><i class="lg lg-b"></i>alerts</span>
+        </div>
+      </div>
+      <canvas id="trend"></canvas>
+    </div>
+  </section>
+
+  <!-- ---------------------------- RIGHT --------------------------- -->
+  <aside class="rail rail-right">
+    <section class="card">
+      <div class="card-head">
+        <h2>Zone telemetry</h2>
+        <span class="pill" id="zone-count">0</span>
+      </div>
+      <div id="zone-list" class="zone-list"></div>
+    </section>
+
+    <section class="card alerts-card">
+      <div class="card-head">
+        <h2>Alert stream</h2>
+        <label class="chk"><input type="checkbox" id="chk-sound" checked/> sound</label>
+      </div>
+      <div id="alert-feed" class="alert-feed"></div>
+    </section>
+  </aside>
+</main>
+
+<div class="toasts" id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
