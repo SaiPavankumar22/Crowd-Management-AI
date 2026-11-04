@@ -17,6 +17,9 @@ class ModelManager:
         self.requested = [model_name] + list(fallbacks)
         self.conf = conf
         self.imgsz = imgsz
+        self.default_conf = conf
+        self.default_imgsz = imgsz
+        self.profile = "balanced" if (conf, imgsz) == (0.30, 640) else "custom"
         self.lock = threading.RLock()
         self.ready = threading.Event()
         self.model = None
@@ -69,18 +72,32 @@ class ModelManager:
             self.detect(dummy)
         return self.info()
 
+    def set_profile(self, profile: str) -> dict:
+        """Adjust detector sensitivity/resolution without reloading weights."""
+        settings = {
+            "balanced": (0.30, 640),
+            "dense": (0.15, 1280),
+            "custom": (self.default_conf, self.default_imgsz),
+        }
+        if profile not in settings:
+            raise ValueError("profile must be balanced, dense, or custom")
+        with self.lock:
+            self.conf, self.imgsz = settings[profile]
+            self.profile = profile
+        return self.info()
+
     def detect(self, frame):
         """Return (boxes_xyxy float32 [n,4], confidences float32 [n])."""
         return self.detect_batch([frame])[0]
 
     def detect_batch(self, frames):
         """Run one model call for multiple frames and return per-frame results."""
-        kwargs = dict(conf=self.conf, classes=[0], imgsz=self.imgsz,
-                      device=self.device, verbose=False)
-        if self.half:  # GPU only -- omitting it on CPU silences a warning spam
-            kwargs["half"] = True
         started = time.perf_counter()
         with self.lock:
+            kwargs = dict(conf=self.conf, classes=[0], imgsz=self.imgsz,
+                          device=self.device, verbose=False)
+            if self.half:  # GPU only -- omitting it on CPU silences a warning spam
+                kwargs["half"] = True
             results = self.model.predict(frames, **kwargs)
         metrics.inc("godavari_inference_batches_total")
         metrics.inc("godavari_inference_frames_total", len(frames))
@@ -112,5 +129,8 @@ class ModelManager:
             "loaded": bool(self.model is not None),
             "load_error": self.load_error,
             "supported_batch_size": 1,
+            "profile": self.profile,
+            "confidence": self.conf,
+            "imgsz": self.imgsz,
             "available_models": list(dict.fromkeys(self.requested)),
         }
