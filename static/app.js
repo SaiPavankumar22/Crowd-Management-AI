@@ -15,6 +15,13 @@ const LEVEL_COLOR = {
   OK: "#34d399", BUSY: "#fbbf24", WARNING: "#fb923c", OVERCROWDED: "#f87171",
 };
 const LEVEL_ORDER = { OK: 0, BUSY: 1, WARNING: 2, OVERCROWDED: 3 };
+const OVERLAY_PRESETS = {
+  safety: { heatmap: false, zones: true, flow: false, countLines: true, detections: true },
+  flow: { heatmap: false, zones: true, flow: true, countLines: true, detections: false },
+  density: { heatmap: true, zones: true, flow: false, countLines: false, detections: false },
+  access: { heatmap: false, zones: true, flow: false, countLines: true, detections: false },
+  clean: { heatmap: false, zones: false, flow: false, countLines: false, detections: false },
+};
 const RING_C = 2 * Math.PI * 19; // gauge circumference (r = 19 in a 46 box)
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -41,8 +48,11 @@ const state = {
   sys: {},
   selectedId: null,
   view: "live",
-  overlays: { heatmap: true, zones: true, flow: true },
+  overlays: { heatmap: false, zones: true, flow: false, countLines: true, detections: true },
+  heatOpacity: 0.58,
+  focusZoneId: null,
   draw: { active: false, pts: [] },
+  lineDraw: { active: false, pts: [] },
   soundOn: true,
   bootedAlerts: false,
   hist: { total: [], tracks: [], fps: [], risk: [], cams: {}, zones: {}, markers: [] },
@@ -53,6 +63,7 @@ const state = {
   audioCtx: null,
   ov: { w: 0, h: 0 },
   kpi: {},
+  heatmapArchive: { camera: "", items: [], playing: false, timer: null },
 };
 
 let ws = null;
@@ -67,10 +78,16 @@ window.addEventListener("DOMContentLoaded", () => {
   refreshSystem();
   refreshAlerts();
   refreshSamples();
+  refreshAnalytics();
+  setInterval(refreshAnalytics, 30000);
   tickClock();
   setInterval(tickClock, 1000);
   setInterval(refreshWallImages, 1300);
   window.addEventListener("resize", sizeOverlay);
+  window.addEventListener("resize", () => {
+    const range = $("heatmap-range");
+    if (range && !range.disabled) renderArchivedHeatmap(Number(range.value));
+  });
   if (window.ResizeObserver) {
     new ResizeObserver(() => sizeOverlay()).observe($("stage"));
   }
@@ -100,6 +117,19 @@ function bindUI() {
   });
 
   $("btn-start").onclick = addCamera;
+  $("btn-analytics").onclick = refreshAnalytics;
+  $("analytics-period").onchange = refreshAnalytics;
+  $("btn-fullscreen").onclick = async () => {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else {
+      setView("wall");
+      await $("wall-wrap").requestFullscreen?.();
+    }
+  };
+  $("btn-count-line").onclick = startCountLineDrawing;
+  $("heatmap-camera").onchange = loadHeatmapHistory;
+  $("heatmap-range").oninput = (e) => renderArchivedHeatmap(Number(e.target.value));
+  $("btn-heatmap-play").onclick = toggleHeatmapPlayback;
   $("chk-draw").onchange = toggleDraw;
   $("btn-finish").onclick = finishZone;
   $("btn-grid").onclick = autoGrid;
@@ -111,6 +141,24 @@ function bindUI() {
   };
   $("btn-del-cam").onclick = deleteCamera;
   $("chk-sound").onchange = (e) => { state.soundOn = e.target.checked; };
+  $("detector-profile").onchange = async (e) => {
+    const select = e.target;
+    select.disabled = true;
+    try {
+      const response = await fetch("/api/detector-profile", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: select.value }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not change detection profile");
+      state.sys = { ...(state.sys || {}), ...data };
+      renderEngine();
+      $("detector-profile-note").textContent = `Active · ${data.imgsz}px · confidence ${data.confidence}. Expect more compute load and some extra false detections.`;
+    } catch (err) {
+      alert(err.message);
+      select.value = state.sys?.profile || "balanced";
+    } finally { select.disabled = false; }
+  };
 
   document.querySelectorAll("#view-seg button").forEach((b) => {
     b.onclick = () => setView(b.dataset.view);
@@ -120,9 +168,19 @@ function bindUI() {
       const k = b.dataset.ov;
       state.overlays[k] = !state.overlays[k];
       b.classList.toggle("on", state.overlays[k]);
+      if (k === "detections") updateDetectionDisplay(state.overlays[k]);
+      updatePresetState();
       drawOverlay();
     };
   });
+  document.querySelectorAll(".preset-btn").forEach((b) => {
+    b.onclick = () => applyOverlayPreset(b.dataset.preset);
+  });
+  $("heat-opacity").oninput = (e) => {
+    state.heatOpacity = Number(e.target.value) / 100;
+    $("heat-opacity-value").textContent = `${e.target.value}%`;
+    drawOverlay();
+  };
 
   // drag & drop upload
   const drop = $("drop");
@@ -149,6 +207,9 @@ function bindUI() {
     else if (e.key === "h" || e.key === "H") pokeToggle("heatmap");
     else if (e.key === "z" || e.key === "Z") pokeToggle("zones");
     else if (e.key === "f" || e.key === "F") pokeToggle("flow");
+    else if (["1", "2", "3", "4", "5"].includes(e.key)) {
+      applyOverlayPreset(["safety", "flow", "density", "access", "clean"][Number(e.key) - 1]);
+    }
   });
 
   document.body.addEventListener("click", initAudioOnce, { once: true });
@@ -157,6 +218,43 @@ function bindUI() {
 function pokeToggle(k) {
   const btn = document.querySelector(`.tgl[data-ov="${k}"]`);
   if (btn) btn.click();
+}
+
+function updatePresetState() {
+  const active = Object.entries(OVERLAY_PRESETS).find(([, preset]) =>
+    Object.keys(preset).every((key) => !!state.overlays[key] === preset[key]));
+  document.querySelectorAll(".preset-btn").forEach((b) => {
+    const on = active && b.dataset.preset === active[0];
+    b.classList.toggle("on", !!on);
+    b.setAttribute("aria-pressed", String(!!on));
+  });
+  document.querySelectorAll(".tgl[data-ov]").forEach((b) => {
+    b.classList.toggle("on", !!state.overlays[b.dataset.ov]);
+    b.setAttribute("aria-pressed", String(!!state.overlays[b.dataset.ov]));
+  });
+}
+
+function applyOverlayPreset(name) {
+  const preset = OVERLAY_PRESETS[name];
+  if (!preset) return;
+  const previous = state.overlays.detections;
+  Object.assign(state.overlays, preset);
+  if (previous !== preset.detections) updateDetectionDisplay(preset.detections);
+  updatePresetState();
+  drawOverlay();
+}
+
+async function updateDetectionDisplay(enabled) {
+  const cam = selectedCam();
+  if (!cam) return;
+  cam.display = { ...(cam.display || {}), detections: enabled };
+  try {
+    const r = await fetch(`/api/cameras/${cam.id}/display`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ detections: enabled }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+  } catch (err) { toast("Display setting not saved", err.message); }
 }
 
 function initAudioOnce() {
@@ -228,6 +326,143 @@ async function refreshAlerts() {
     renderAlerts();
     state.bootedAlerts = true;
   } catch { /* ignore */ }
+}
+
+async function refreshAnalytics() {
+  const host = $("analytics-summary");
+  if (!host) return;
+  try {
+    const hours = Number($("analytics-period")?.value || 24);
+    const r = await fetch(`/api/analytics?hours=${hours}`);
+    const data = await r.json();
+    $("analytics-window").textContent = `${hours}h`;
+    const eventReport = document.querySelector('a[href^="/api/reports/event.pdf"]');
+    if (eventReport) eventReport.href = `/api/reports/event.pdf?hours=${hours}`;
+    const cards = Object.entries(data.forecasts || {}).map(([id, f]) => {
+      const cam = state.cameras.find((c) => c.id === id);
+      const growth = f.growth_per_min;
+      return `<article class="analytics-tile"><b>${esc(cam?.name || id)}</b>
+        <span>${f.count} now · ${growth > 0 ? "+" : ""}${growth}/min</span>
+        <small>5m ${f.forecast[5]} · 15m ${f.forecast[15]} · 30m ${f.forecast[30]}</small>
+        <small>${esc(f.confidence)} · ${data.samples} samples in window</small></article>`;
+    });
+    const bottlenecks = (data.bottlenecks || []).length;
+    cards.push(`<article class="analytics-tile"><b>Pressure signals</b><span>${bottlenecks} possible bottlenecks</span><small>High occupancy with low observed movement</small><small>${esc(data.comparison || "")}</small></article>`);
+    (data.growth_alerts || []).forEach((a) => cards.push(`<article class="analytics-tile growth-alert"><b>Rapid crowd growth · ${esc(a.cam_name)}</b><span>+${a.growth_per_min}/min · ${a.count} people</span><small>${esc(a.basis)}</small></article>`));
+    (data.queues || []).forEach((q) => cards.push(`<article class="analytics-tile"><b>Queue · ${esc(q.zone)}</b><span>${q.length} people</span><small>${q.wait_minutes == null ? "Wait estimate needs exit history" : `Estimated wait ${q.wait_minutes} min`}</small><small>${esc(q.basis)} · ${esc(state.cameras.find((c) => c.id === q.cam_id)?.name || q.cam_id)}</small></article>`));
+    (data.transitions || []).sort((a, b) => b.count - a.count).slice(0, 6).forEach((t) => {
+      cards.push(`<article class="analytics-tile"><b>Zone movement</b><span>${esc(t.from)} → ${esc(t.to)}</span><small>${t.count} tracked transitions · ${esc(state.cameras.find((c) => c.id === t.cam_id)?.name || t.cam_id)}</small></article>`);
+    });
+    if (data.performance) cards.push(`<article class="analytics-tile"><b>Performance</b><span>${data.performance.running}/${data.performance.cameras} cameras live</span><small>${data.performance.mean_infer_fps} mean inference FPS · ${data.performance.degraded} degraded</small><small>${data.performance.sample_coverage} samples in this window</small></article>`);
+    state.cameras.forEach((cam) => (cam.metrics?.count_lines || []).forEach((line) => {
+      cards.push(`<article class="analytics-tile"><b>Gate · ${esc(line.name)}</b><span>${line.entry || 0} in · ${line.exit || 0} out</span><small>Track-based directional crossings</small></article>`);
+    }));
+    host.innerHTML = cards.join("");
+  } catch {
+    host.innerHTML = `<div class="empty-zone">Analytics service is temporarily unavailable.</div>`;
+  }
+}
+
+function syncHeatmapCameras() {
+  const select = $("heatmap-camera");
+  if (!select) return;
+  const key = state.cameras.map((c) => `${c.id}:${c.name}`).join("|");
+  if (select.dataset.key !== key) {
+    select.dataset.key = key;
+    select.innerHTML = state.cameras.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+  }
+  if (state.cameras.some((c) => c.id === state.selectedId)) select.value = state.selectedId;
+  if (select.value && state.heatmapArchive.camera !== select.value) loadHeatmapHistory();
+}
+
+async function loadHeatmapHistory() {
+  const camId = $("heatmap-camera").value;
+  if (!camId) return;
+  state.heatmapArchive.camera = camId;
+  state.heatmapArchive.items = [];
+  if (state.heatmapArchive.timer) clearInterval(state.heatmapArchive.timer);
+  state.heatmapArchive.playing = false;
+  $("btn-heatmap-play").textContent = "Play";
+  try {
+    const r = await fetch(`/api/heatmaps?cam_id=${encodeURIComponent(camId)}&hours=24`);
+    if (!r.ok) throw new Error("Heatmap history unavailable");
+    state.heatmapArchive.items = await r.json();
+    const range = $("heatmap-range");
+    range.max = Math.max(0, state.heatmapArchive.items.length - 1);
+    range.value = range.max;
+    range.disabled = state.heatmapArchive.items.length < 1;
+    if (range.disabled) $("heatmap-time").textContent = "Heatmap snapshots are saved every five minutes";
+    else renderArchivedHeatmap(Number(range.value));
+  } catch { $("heatmap-time").textContent = "Could not load heatmap history"; }
+}
+
+function renderArchivedHeatmap(index) {
+  const item = state.heatmapArchive.items[index];
+  const canvas = $("heatmap-history");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect(), dpr = DPR();
+  if (!rect.width) return;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.fillStyle = "#070b13";
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  if (item) {
+    drawHeat(ctx, item.heatmap, rect.width, rect.height);
+    $("heatmap-time").textContent = new Date(item.ts * 1000).toLocaleString();
+    $("heatmap-range").value = index;
+  } else $("heatmap-time").textContent = "No archived heatmaps yet";
+}
+
+function toggleHeatmapPlayback() {
+  const archive = state.heatmapArchive;
+  if (archive.playing) {
+    clearInterval(archive.timer); archive.timer = null; archive.playing = false;
+    $("btn-heatmap-play").textContent = "Play"; return;
+  }
+  if (archive.items.length < 2) return;
+  archive.playing = true;
+  $("btn-heatmap-play").textContent = "Pause";
+  archive.timer = setInterval(() => {
+    let i = Number($("heatmap-range").value) + 1;
+    if (i >= archive.items.length) i = 0;
+    renderArchivedHeatmap(i);
+  }, 1000);
+}
+
+function startCountLineDrawing() {
+  const cam = selectedCam();
+  if (!cam) { alert("Select a camera first."); return; }
+  if (state.lineDraw.active) { cancelDraw(); return; }
+  state.draw.active = false;
+  state.draw.pts = [];
+  $("chk-draw").checked = false;
+  $("new-zone-form").classList.add("hidden");
+  state.lineDraw = { active: true, pts: [] };
+  $("btn-count-line").textContent = "Cancel line";
+  $("draw-hint").textContent = "Click two points across the entrance or exit · Esc cancels";
+  $("draw-hint").classList.remove("hidden");
+  $("stage").classList.add("drawing");
+  drawOverlay();
+}
+
+async function saveCountLine(points) {
+  const cam = selectedCam();
+  if (!cam) return;
+  const name = prompt("Name this line (include ‘exit’ for queue service tracking)", "Main exit");
+  if (name === null) { cancelDraw(); return; }
+  const line = { id: crypto.randomUUID().slice(0, 8), name: name.trim() || "Count line",
+    a: points[0], b: points[1], entry_side: "positive" };
+  const lines = [...(cam.count_lines || []), line];
+  try {
+    const res = await fetch(`/api/cameras/${cam.id}/count-lines`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ lines }) });
+    if (!res.ok) throw new Error(await res.text());
+    cam.count_lines = lines;
+    toast("Count line saved", "Counts follow the line direction shown on the camera.");
+  } catch (err) { alert(`Could not save line: ${err.message}`); }
+  cancelDraw();
 }
 
 async function refreshSamples() {
@@ -328,6 +563,7 @@ function renderAll() {
   renderKpis();
   drawTrend();
   renderEngine();
+  syncHeatmapCameras();
   if (state.view === "wall") renderWall();
 }
 
@@ -359,6 +595,12 @@ function renderEngine() {
   ];
   $("sys-kv").innerHTML = rows.map(([k, v, good]) =>
     `<dt>${k}</dt><dd class="${good ? "good" : ""}">${esc(v)}</dd>`).join("");
+  const profile = $("detector-profile");
+  if (profile && document.activeElement !== profile) profile.value = sys.profile || "balanced";
+  const note = $("detector-profile-note");
+  if (note) note.textContent = sys.profile === "dense"
+    ? `Dense profile active · ${sys.imgsz}px · confidence ${sys.confidence}. Expect more CPU/GPU load and some extra false detections.`
+    : "Dense mode uses a larger image and lower confidence threshold. It can improve small-person recall, with slower inference and more false detections.";
   const es = $("engine-state");
   es.textContent = sys.loaded ? "READY" : "LOADING";
   es.style.color = sys.loaded ? "#6ee7b7" : "";
@@ -401,6 +643,10 @@ function renderStage() {
   const cam = selectedCam();
   const m = (cam && cam.metrics) || {};
   const has = !!cam;
+  if (cam && cam.display && typeof cam.display.detections === "boolean") {
+    state.overlays.detections = cam.display.detections;
+    updatePresetState();
+  }
 
   $("stage-empty").classList.toggle("hidden", has);
   $("wall-wrap").classList.toggle("hidden", state.view !== "wall" || !has);
@@ -472,10 +718,12 @@ function drawOverlay() {
   const cam = selectedCam();
   const m = (cam && cam.metrics) || {};
 
-  if (state.overlays.heatmap && m.heatmap) drawHeat(ctx, m.heatmap, W, H);
+  if (state.overlays.heatmap && m.heatmap) drawHeat(ctx, m.heatmap, W, H, state.heatOpacity);
   if (cam && state.overlays.zones) drawZones(ctx, cam, m, W, H);
   if (cam && state.overlays.flow) drawFlow(ctx, cam, m, W, H);
+  if (cam && state.overlays.countLines) drawCountLines(ctx, m, W, H);
   if (state.draw.active) drawDraft(ctx, W, H);
+  if (state.lineDraw.active) drawCountLineDraft(ctx, state.lineDraw.pts, W, H);
 }
 
 function buildHeatLut() {
@@ -504,7 +752,7 @@ function buildHeatLut() {
   return lut;
 }
 
-function drawHeat(ctx, hm, W, H) {
+function drawHeat(ctx, hm, W, H, alpha = 0.84) {
   if (!hm || !hm.b64) return;
   if (!heatLut) heatLut = buildHeatLut();
   let bin;
@@ -530,7 +778,7 @@ function drawHeat(ctx, hm, W, H) {
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.globalAlpha = 0.84;
+  ctx.globalAlpha = alpha;
   ctx.filter = "blur(10px)";
   ctx.drawImage(heatOff, 0, 0, W, H);
   ctx.restore();
@@ -546,6 +794,7 @@ function polyPath(ctx, polygon, W, H) {
 }
 
 function chip(ctx, text, x, y, color, sub) {
+  const baseAlpha = ctx.globalAlpha;
   ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
   const padX = 7, padY = 5;
   const tw = ctx.measureText(text).width;
@@ -562,10 +811,10 @@ function chip(ctx, text, x, y, color, sub) {
   ctx.fill();
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
-  ctx.globalAlpha = 0.55;
+  ctx.globalAlpha = baseAlpha * 0.55;
   roundRect(ctx, bx, by, w, h, 7);
   ctx.stroke();
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = baseAlpha;
 
   ctx.fillStyle = color;
   ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
@@ -595,6 +844,9 @@ function drawZones(ctx, cam, m, W, H) {
   let lane = 0; // stagger labels that would sit under the HUD
 
   for (const z of zones) {
+    const focused = !state.focusZoneId || state.focusZoneId === z.id;
+    ctx.save();
+    if (!focused) ctx.globalAlpha = 0.22;
     const met = mets.find((x) => x.id === z.id) || {};
     const level = met.level || "OK";
     const color = LEVEL_COLOR[level] || LEVEL_COLOR.OK;
@@ -605,7 +857,7 @@ function drawZones(ctx, cam, m, W, H) {
 
     ctx.save();
     ctx.strokeStyle = hexA(color, 0.85);
-    ctx.lineWidth = level === "OVERCROWDED" ? 2 : 1.4;
+    ctx.lineWidth = state.focusZoneId === z.id ? 3 : level === "OVERCROWDED" ? 2 : 1.4;
     if (level === "OVERCROWDED" || level === "WARNING") {
       ctx.shadowColor = hexA(color, 0.8);
       ctx.shadowBlur = 14;
@@ -624,6 +876,7 @@ function drawZones(ctx, cam, m, W, H) {
     if (labelY < 78) { labelY = 78 + lane * 26; lane += 1; }
     chip(ctx, `${z.name}  ${met.count ?? 0}/${cap}`, minX + 4, labelY, color,
       `${occ.toFixed(0)}% · ${level}`);
+    ctx.restore();
   }
 }
 
@@ -703,6 +956,50 @@ function drawFlow(ctx, cam, m, W, H) {
   }
 }
 
+function drawCountLines(ctx, metrics, W, H) {
+  for (const line of metrics.count_lines || []) {
+    const [ax, ay] = line.a || [0, 0], [bx, by] = line.b || [1, 1];
+    const x1 = ax * W, y1 = ay * H, x2 = bx * W, y2 = by * H;
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len;
+    const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+    const direction = line.entry_side === "negative" ? -1 : 1;
+    const tx = midX + nx * direction * 20, ty = midY + ny * direction * 20;
+    ctx.save();
+    ctx.strokeStyle = "rgba(56, 189, 248, .95)";
+    ctx.fillStyle = "rgba(56, 189, 248, .95)";
+    ctx.shadowColor = "rgba(56, 189, 248, .7)";
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([10, 5]);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.setLineDash([]);
+    const ang = Math.atan2(ty - midY, tx - midX), head = 9;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - head * Math.cos(ang - .55), ty - head * Math.sin(ang - .55));
+    ctx.lineTo(tx - head * Math.cos(ang + .55), ty - head * Math.sin(ang + .55));
+    ctx.closePath(); ctx.fill();
+    chip(ctx, `${line.name || "Count line"}  ↑${line.entry || 0}  ↓${line.exit || 0}`,
+      midX + 8, midY + 8, "#38bdf8", "entry / exit");
+    ctx.restore();
+  }
+}
+
+function drawCountLineDraft(ctx, pts, W, H) {
+  if (!pts.length) return;
+  ctx.save();
+  ctx.strokeStyle = "#38bdf8"; ctx.fillStyle = "#38bdf8";
+  ctx.lineWidth = 3; ctx.setLineDash([8, 5]);
+  ctx.beginPath(); ctx.moveTo(pts[0][0] * W, pts[0][1] * H);
+  if (pts[1]) ctx.lineTo(pts[1][0] * W, pts[1][1] * H);
+  ctx.stroke(); ctx.setLineDash([]);
+  pts.forEach((p) => { ctx.beginPath(); ctx.arc(p[0] * W, p[1] * H, 5, 0, Math.PI * 2); ctx.fill(); });
+  const p = pts[pts.length - 1];
+  chip(ctx, `${pts.length}/2 points`, p[0] * W + 8, p[1] * H + 8, "#38bdf8", "count line");
+  ctx.restore();
+}
+
 function drawDraft(ctx, W, H) {
   const pts = state.draw.pts;
   if (!pts.length) return;
@@ -744,6 +1041,7 @@ function renderZones() {
   const cam = selectedCam();
   const list = $("zone-list");
   const zones = (cam && cam.zones) || [];
+  if (state.focusZoneId && !zones.some((z) => z.id === state.focusZoneId)) state.focusZoneId = null;
   $("zone-count").textContent = zones.length ? String(zones.length) : "0";
 
   if (!zones.length) {
@@ -818,6 +1116,10 @@ function createZoneRow(z) {
     if (!cam) return;
     saveZones((cam.zones || []).filter((x) => x.id !== z.id));
   };
+  el.onclick = (event) => {
+    if (event.target.closest("input, button")) return;
+    setZoneFocus(state.focusZoneId === z.id ? null : z.id);
+  };
   return row;
 }
 
@@ -827,7 +1129,7 @@ function updateZoneRow(row, z, met) {
   const color = LEVEL_COLOR[level] || LEVEL_COLOR.OK;
   const cap = met.capacity ?? z.capacity;
 
-  row.el.className = "zone-row lvl-" + level;
+  row.el.className = `zone-row lvl-${level}${state.focusZoneId === z.id ? " focused" : ""}`;
   row.fg.style.stroke = color;
   row.fg.style.strokeDashoffset = String(RING_C * (1 - occ / 100));
   row.gtxt.textContent = met.count ?? 0;
@@ -910,6 +1212,7 @@ async function autoGrid() {
 
 /* ------------------------------------------------------------ drawing --- */
 function toggleDraw(e) {
+  if (e.target.checked && state.lineDraw.active) cancelDraw();
   state.draw.active = e.target.checked;
   state.draw.pts = [];
   $("stage").classList.toggle("drawing", state.draw.active);
@@ -922,19 +1225,54 @@ function toggleDraw(e) {
 function cancelDraw() {
   state.draw.pts = [];
   state.draw.active = false;
+  state.lineDraw = { active: false, pts: [] };
   $("chk-draw").checked = false;
+  $("btn-count-line").textContent = "Count line";
   $("stage").classList.remove("drawing");
   $("draw-hint").classList.add("hidden");
+  $("draw-hint").textContent = "Click on the frame to place polygon points · Finish closes the loop · Esc cancels";
   $("new-zone-form").classList.add("hidden");
   drawOverlay();
 }
 
 function overlayClick(ev) {
-  if (!state.draw.active) return;
   const rect = $("stage").getBoundingClientRect();
   const x = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
   const y = clamp((ev.clientY - rect.top) / rect.height, 0, 1);
+  if (state.lineDraw.active) {
+    state.lineDraw.pts.push([+x.toFixed(4), +y.toFixed(4)]);
+    if (state.lineDraw.pts.length === 2) {
+      const points = state.lineDraw.pts.slice();
+      state.lineDraw.active = false;
+      saveCountLine(points);
+    }
+    drawOverlay();
+    return;
+  }
+  if (!state.draw.active) {
+    const cam = selectedCam();
+    const hit = cam && (cam.zones || []).find((zone) => pointInPolygon([x, y], zone.polygon));
+    setZoneFocus(hit ? (state.focusZoneId === hit.id ? null : hit.id) : null);
+    return;
+  }
   state.draw.pts.push([+x.toFixed(4), +y.toFixed(4)]);
+  drawOverlay();
+}
+
+function pointInPolygon(point, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i], [xj, yj] = polygon[j];
+    const crosses = ((yi > point[1]) !== (yj > point[1])) &&
+      (point[0] < (xj - xi) * (point[1] - yi) / ((yj - yi) || 1e-9) + xi);
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function setZoneFocus(id) {
+  state.focusZoneId = id;
+  renderZones();
   drawOverlay();
 }
 
@@ -959,6 +1297,7 @@ async function finishZone() {
 function selectCamera(id) {
   if (state.selectedId === id) return;
   state.selectedId = id;
+  state.focusZoneId = null;
   state.zoneRows.clear();
   $("zone-list").innerHTML = "";
   $("feed").dataset.cam = "";

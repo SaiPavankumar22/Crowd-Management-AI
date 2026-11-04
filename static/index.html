@@ -84,6 +84,14 @@
     <section class="card sys">
       <div class="card-head"><h2>Engine</h2><span class="pill" id="engine-state">…</span></div>
       <dl class="kv" id="sys-kv"></dl>
+      <label class="fld detector-profile-label">Detection profile
+        <select id="detector-profile" aria-label="Detection profile">
+          <option value="balanced">Balanced · faster</option>
+          <option value="dense">Dense crowd · more detail</option>
+          <option value="custom">Configured defaults</option>
+        </select>
+      </label>
+      <p class="muted sm detector-profile-note" id="detector-profile-note">Dense mode uses a larger image and lower confidence threshold. It can improve small-person recall, with slower inference and more false detections.</p>
     </section>
   </aside>
 
@@ -103,10 +111,29 @@
             <button data-view="live" class="on">Live</button>
             <button data-view="wall">Wall</button>
           </div>
-          <button class="tgl on" data-ov="heatmap" title="Heatmap (H)">Heatmap</button>
-          <button class="tgl on" data-ov="zones" title="Zones (Z)">Zones</button>
-          <button class="tgl on" data-ov="flow" title="Flow (F)">Flow</button>
+          <button id="btn-fullscreen" class="btn ghost sm" title="Fullscreen control room">Fullscreen</button>
         </div>
+      </div>
+
+      <div class="operator-toolbar">
+        <div class="preset-row" role="group" aria-label="Operator overlay presets">
+          <button class="preset-btn on" data-preset="safety" title="Safety overlay preset · 1"><span>Safety</span><small>Capacity</small></button>
+          <button class="preset-btn" data-preset="flow" title="Flow overlay preset · 2"><span>Flow</span><small>Direction</small></button>
+          <button class="preset-btn" data-preset="density" title="Density overlay preset · 3"><span>Density</span><small>Hotspots</small></button>
+          <button class="preset-btn" data-preset="access" title="Access overlay preset · 4"><span>Access</span><small>Gates</small></button>
+          <button class="preset-btn" data-preset="clean" title="Minimal overlay preset · 5"><span>Clean</span><small>Video</small></button>
+        </div>
+        <details class="overlay-options">
+          <summary>Layers & display</summary>
+          <div class="overlay-popover">
+            <button class="tgl" data-ov="heatmap">Heatmap</button>
+            <button class="tgl on" data-ov="zones">Zones</button>
+            <button class="tgl" data-ov="flow">Flow arrows</button>
+            <button class="tgl on" data-ov="countLines">Entry / exit lines</button>
+            <button class="tgl on" data-ov="detections">Detection boxes</button>
+            <label class="opacity-control">Heatmap opacity <input id="heat-opacity" type="range" min="10" max="90" value="58"/><output id="heat-opacity-value">58%</output></label>
+          </div>
+        </details>
       </div>
 
       <div class="stage" id="stage">
@@ -146,6 +173,7 @@
         <div class="toolgroup">
           <label class="switch"><input type="checkbox" id="chk-draw"/><span></span>Draw zone</label>
           <button id="btn-grid" class="btn ghost sm">Auto-grid</button>
+          <button id="btn-count-line" class="btn ghost sm" title="Configure a virtual entry/exit line">Count line</button>
           <button id="btn-clear-zones" class="btn ghost sm">Clear zones</button>
           <button id="btn-del-cam" class="btn ghost sm danger">Remove source</button>
         </div>
@@ -169,6 +197,30 @@
       </div>
       <canvas id="trend"></canvas>
     </div>
+
+    <section class="card analytics-card">
+      <div class="card-head">
+        <h2>Event intelligence</h2>
+        <div class="toolgroup"><select id="analytics-period" aria-label="Analytics event window">
+          <option value="6">6 hours</option><option value="24" selected>24 hours</option>
+          <option value="72">3 days</option><option value="168">7 days</option></select>
+          <span class="pill" id="analytics-window">24h</span>
+          <a class="btn ghost sm" href="/api/reports/daily.pdf">Daily PDF</a>
+          <a class="btn ghost sm" href="/api/reports/event.pdf?hours=6">Event PDF · 6h</a>
+          <button id="btn-analytics" class="btn ghost sm">Refresh</button></div>
+      </div>
+      <div id="analytics-summary" class="analytics-grid"><div class="empty-zone">Collecting samples for forecasts and event comparisons…</div></div>
+      <p class="muted sm">Forecasts use recent linear trends. Queue time and bottleneck signals are estimates; confirm against live camera conditions and on-site staff.</p>
+    </section>
+
+    <section class="card archive-card">
+      <div class="card-head"><h2>Heatmap timeline</h2><div class="toolgroup">
+        <select id="heatmap-camera" aria-label="Camera for heatmap timeline"></select>
+        <button id="btn-heatmap-play" class="btn ghost sm">Play</button></div></div>
+      <canvas id="heatmap-history" aria-label="Historical crowd heatmap"></canvas>
+      <div class="archive-controls"><input id="heatmap-range" type="range" min="0" max="0" value="0" disabled/>
+        <span id="heatmap-time" class="muted sm">No archived heatmaps yet</span></div>
+    </section>
   </section>
 
   <!-- ---------------------------- RIGHT --------------------------- -->

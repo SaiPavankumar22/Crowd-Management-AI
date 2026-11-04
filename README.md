@@ -11,7 +11,8 @@ built to be watched in a control room.
 ![Live dashboard: two sources, per-zone levels, alert stream, trend](docs/dashboard.png)
 
 [Quick start](#quick-start) · [Docker](#run-it-in-docker) · [Deployment](docs/DEPLOYMENT.md) ·
-[Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Test footage](docs/FOOTAGE.md)
+[Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Improvement plan](docs/improvement.md) ·
+[Test footage](docs/FOOTAGE.md)
 
 ---
 
