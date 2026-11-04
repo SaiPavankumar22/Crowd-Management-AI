@@ -1,0 +1,16 @@
+# Build context exclusions. Keep the image small and deterministic:
+# never ship the venv, recorded state, caches or screenshots.
+.venv/
+.data/
+.tmp/
+docs/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.freebuff/
+ui_check.png
+*.log
+.env

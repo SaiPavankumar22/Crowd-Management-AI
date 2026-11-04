@@ -1,0 +1,45 @@
+name: godavari
+
+services:
+  godavari:
+    build:
+      context: .
+      args:
+        # CPU by default. For a GPU host use docker-compose.gpu.yml instead.
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: godavari-crowd-monitor:${TAG:-cpu}
+    container_name: godavari
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+    # Published to the loopback interface only: the dashboard has no
+    # authentication. Put Caddy/nginx in front for remote access
+    # (see docs/DEPLOYMENT.md), or change to "8000:8000" on a trusted LAN.
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+
+    environment:
+      CROWD_MODEL: ${CROWD_MODEL:-yolo26n.pt}
+      CROWD_CONF: ${CROWD_CONF:-0.30}
+      CROWD_IMGSZ: ${CROWD_IMGSZ:-640}
+      CROWD_TARGET_INFER_FPS: ${CROWD_TARGET_INFER_FPS:-5}
+      CROWD_MAX_FRAME_WIDTH: ${CROWD_MAX_FRAME_WIDTH:-1280}
+      CROWD_LOOP: ${CROWD_LOOP:-1}
+      CROWD_WARN_PCT: ${CROWD_WARN_PCT:-75}
+      CROWD_ALERT_SUSTAIN: ${CROWD_ALERT_SUSTAIN:-5}
+      CROWD_ALERT_COOLDOWN: ${CROWD_ALERT_COOLDOWN:-60}
+      CROWD_STREAM_FPS: ${CROWD_STREAM_FPS:-12}
+      TZ: ${TZ:-Asia/Kolkata}
+
+    volumes:
+      # cameras.json, uploads, sample clips and the alert database.
+      - godavari-data:/app/.data
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  godavari-data:

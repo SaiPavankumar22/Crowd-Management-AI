@@ -1,0 +1,18 @@
+# GPU override: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# Requires on the host: NVIDIA driver + nvidia-container-toolkit
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+# Verify with: docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
+name: godavari
+
+services:
+  godavari:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    image: godavari-crowd-monitor:gpu
+    gpus: all
+    environment:
+      # Fail fast instead of silently running on CPU when the GPU is missing.
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
