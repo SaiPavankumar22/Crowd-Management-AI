@@ -1,0 +1,16 @@
+*.pt
+.venv/
+.data/
+.tmp/
+_*.png
+_*.jpg
+__pycache__/
+uploads/
+data/
+samples/*.mp4
+samples/*.avi
+samples/*.mov
+samples/*.mkv
+samples/*.webm
+*.pyc
+.DS_Store

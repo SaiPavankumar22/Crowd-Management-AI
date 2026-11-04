@@ -1,0 +1,13 @@
+# Pinned to the versions this app is tested against.
+#
+# supervision 0.31 removed the built-in trackers (`sv.ByteTrack` -> AttributeError
+# on the first camera), so the tracker dependency must stay pinned until the
+# code moves to the new API. Bump these together and re-run
+# `python tools/ui_check.py` + add a camera before shipping.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+ultralytics==8.4.120
+supervision==0.18.0
+opencv-python==5.0.0.93
+numpy==2.4.6
+python-multipart==0.0.6
