@@ -67,6 +67,9 @@ def system_info() -> dict:
     info["samples"] = len(ingest.list_samples())
     info["uptime_s"] = int(time.time() - START_TS)
     info["ws_clients"] = len(_ws_clients)
+    info["scheduler"] = registry.scheduler.stats()
+    info["outbox"] = registry.outbox.stats()
+    info["density"] = registry.density.info()
     return info
 
 
@@ -260,7 +263,9 @@ def store_recent_alerts(limit: int):
 
 # --------------------------------------------------------------- video
 @app.get("/api/cameras/{cam_id}/stream")
-async def cam_stream(cam_id: str):
+async def cam_stream(cam_id: str, raw: int = 0):
+    """MJPEG stream. `raw=1` serves the same frames without detection boxes,
+    so a split view can show the annotated and the clean picture together."""
     if registry.get(cam_id) is None:
         raise HTTPException(404, "camera not found")
 
@@ -268,7 +273,9 @@ async def cam_stream(cam_id: str):
         period = 1.0 / max(1, config.STREAM_FPS)
         while registry.get(cam_id) is not None:
             worker = registry.workers.get(cam_id)
-            jpeg = worker.latest_jpeg if worker else None
+            jpeg = None
+            if worker is not None:
+                jpeg = worker.raw_jpeg() if raw else worker.latest_jpeg
             if jpeg is None:
                 time.sleep(0.2)
                 continue
@@ -296,11 +303,23 @@ async def system_endpoint():
 
 @app.get("/api/models")
 async def list_models():
+    """Model registry: backend, version, licence and warm-up state per model."""
     return {
         "active": model.name,
         "available": list(dict.fromkeys(model.requested)),
         "device": model.info()["device"],
+        "models": model.models(),
+        "density": registry.density.info(),
+        "tiling": model.tiling_policy.__dict__,
     }
+
+
+@app.get("/api/models/{name}/status")
+async def model_status(name: str):
+    if name not in dict.fromkeys(model.requested):
+        raise HTTPException(404, "model not registered")
+    return {**model.status(name), "spec": next(
+        (m for m in model.models() if m["name"] == name), {})}
 
 
 @app.put("/api/models")
@@ -339,11 +358,17 @@ async def health_endpoint():
         if c.get("metrics", {}).get("health", {}).get("status")
         in {"stale", "frozen", "dark", "low_contrast", "blurry"}
     ]
+    analytics = registry.analytics_snapshot()
+    analytics_degraded = [cid for cid, row in analytics.items()
+                          if row["status"] == "degraded"]
     return {
-        "status": "degraded" if unhealthy else "healthy",
+        "status": "degraded" if (unhealthy or analytics_degraded) else "healthy",
         "cameras": len(cameras),
         "unhealthy_cameras": unhealthy,
+        "analytics_degraded_cameras": analytics_degraded,
         "model_loaded": bool(model.model is not None),
+        "scheduler": registry.scheduler.stats(),
+        "outbox": registry.outbox.stats(),
     }
 
 
@@ -362,12 +387,67 @@ async def put_calibration(cam_id: str, request: Request):
         calibration = validate_calibration(data)
     except (ValueError, TypeError) as exc:
         raise HTTPException(400, f"invalid calibration: {exc}")
+    # Calibration is versioned and attributed, so an alert can always be traced
+    # back to the geometry that produced it (improvement.md §5).
+    previous = cam.get("calibration") or {}
+    calibration["version"] = int(previous.get("version", 0)) + 1
+    calibration["validated_by"] = str((data or {}).get("validated_by") or "operator")[:60]
+    calibration["validated_at"] = time.time()
     cam["calibration"] = calibration
     worker = registry.workers.get(cam_id)
     if worker:
         worker.calibration = calibration
     registry.save()
+    from . import store
+    store.add_audit("calibration.update", calibration["validated_by"], cam_id,
+                    {"version": calibration["version"],
+                     "inliers": calibration.get("inliers")})
     return {"ok": True, "calibration": calibration}
+
+
+@app.post("/api/alerts/{alert_id}/ack")
+async def ack_alert(alert_id: str, request: Request):
+    """Operator acknowledgement. Stops escalation, keeps the audit record."""
+    by = "operator"
+    try:
+        body = await request.json()
+        by = str(body.get("by") or by)[:60]
+    except Exception:
+        pass
+    row = registry.outbox.ack(alert_id, by)
+    from . import store
+    store.add_audit("alert.ack", by, alert_id, row or {"outbox": "absent"})
+    if row is None:
+        return {"ok": True, "id": alert_id, "acked_by": by, "outbox": "not_queued"}
+    return {"ok": True, **row}
+
+
+@app.post("/api/alerts/{alert_id}/escalate")
+async def escalate_alert(alert_id: str):
+    ok = registry.outbox.escalate(alert_id)
+    from . import store
+    store.add_audit("alert.escalate", "operator", alert_id, {})
+    return {"ok": ok, "id": alert_id}
+
+
+@app.get("/api/outbox")
+async def outbox_status():
+    return registry.outbox.stats()
+
+
+@app.get("/api/audit")
+async def audit_log(limit: int = 100):
+    from . import store
+    return store.recent_audit(limit)
+
+
+@app.get("/api/analytics/health")
+async def analytics_health():
+    """Model-side health: no-inference, count collapse and drift per camera."""
+    data = registry.analytics_snapshot()
+    degraded = [cid for cid, row in data.items() if row["status"] == "degraded"]
+    return {"status": "degraded" if degraded else "healthy",
+            "degraded_cameras": degraded, "cameras": data}
 
 
 @app.get("/api/alerts/export")
