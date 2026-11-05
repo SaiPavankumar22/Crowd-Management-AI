@@ -81,6 +81,41 @@ BATCH_SIZE = int(os.environ.get("CROWD_BATCH_SIZE", "1"))
 MAX_BATCH_WAIT_MS = float(os.environ.get("CROWD_MAX_BATCH_WAIT_MS", "8"))
 FRAME_QUEUE_SIZE = int(os.environ.get("CROWD_FRAME_QUEUE_SIZE", "2"))
 DECODER = os.environ.get("CROWD_DECODER", "auto").lower()
+# Stale results are worse than dropped frames: anything older than this is
+# discarded rather than analysed (improvement.md §8).
+MAX_FRAME_AGE_MS = float(os.environ.get("CROWD_MAX_FRAME_AGE_MS", "500"))
+
+# --- Tiled inference (gated: only when people are small in frame) ----------
+TILING = os.environ.get("CROWD_TILING", "auto").lower()  # auto | off
+TILE_ROWS = int(os.environ.get("CROWD_TILE_ROWS", "3"))
+TILE_COLS = int(os.environ.get("CROWD_TILE_COLS", "3"))
+TILE_OVERLAP = float(os.environ.get("CROWD_TILE_OVERLAP", "0.15"))
+TILE_MIN_BOX_HEIGHT_PX = float(os.environ.get("CROWD_TILE_MIN_BOX_HEIGHT_PX", "40"))
+
+# --- Detail escalation (recover people the full-frame pass cannot resolve) --
+# When a frame yields almost nobody, a cheap tiled probe checks whether that is
+# the truth or a resolution failure; only a clear disagreement pays for the
+# high-resolution pass. See app/detail.py for the measurements behind this.
+DETAIL_PASS = env_bool("CROWD_DETAIL_PASS", True)
+DETAIL_PROBE_BELOW = int(os.environ.get("CROWD_DETAIL_PROBE_BELOW", "6"))
+DETAIL_PROBE_IMGSZ = int(os.environ.get("CROWD_DETAIL_PROBE_IMGSZ", "640"))
+DETAIL_PROBE_GRID = int(os.environ.get("CROWD_DETAIL_PROBE_GRID", "2"))
+DETAIL_IMGSZ = int(os.environ.get("CROWD_DETAIL_IMGSZ", "1280"))
+DETAIL_GRID = int(os.environ.get("CROWD_DETAIL_GRID", "3"))
+DETAIL_IDLE_PROBE_EVERY = int(os.environ.get("CROWD_DETAIL_IDLE_PROBE_EVERY", "4"))
+# Leaving detail mode needs sustained evidence, not one quiet frame.
+DETAIL_EXIT_BELOW = int(os.environ.get("CROWD_DETAIL_EXIT_BELOW", "3"))
+DETAIL_EXIT_FRAMES = int(os.environ.get("CROWD_DETAIL_EXIT_FRAMES", "10"))
+
+# --- Mode router / degraded states ----------------------------------------
+MODE_ROUTER = env_bool("CROWD_MODE_ROUTER", True)
+DENSE_BOX_HEIGHT_PX = float(os.environ.get("CROWD_DENSE_BOX_HEIGHT_PX", "32"))
+MODE_HYSTERESIS_FRAMES = int(os.environ.get("CROWD_MODE_HYSTERESIS_FRAMES", "3"))
+# Density output is advisory until an operator signs off a validation gate.
+DENSITY_MODEL = os.environ.get("CROWD_DENSITY_MODEL", "").strip()
+DENSITY_VALIDATED = env_bool("CROWD_DENSITY_VALIDATED", False)
+DENSITY_PERIOD_S = float(os.environ.get("CROWD_DENSITY_PERIOD_S", "1.5"))
+CALIBRATED_DENSITY_ENABLED = env_bool("CROWD_CALIBRATED_DENSITY", False)
 
 # --- Alerts / calibration -------------------------------------------------
 WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()

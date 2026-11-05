@@ -21,14 +21,17 @@ import numpy as np
 import supervision as sv
 
 from . import config, store
+from .adapters import NullDensityEstimator, TorchscriptDensityEstimator
 from .alerting import AlertEngine
+from .analytics import AnalyticsHealth, AnalyticsHealthConfig
 from .calibration import polygon_area_world
 from .decoder import open_capture
-from .delivery import AlertDispatcher
 from .heatmap import HeatmapAccumulator
 from .health import FrameHealth
 from . import metrics
-from .scheduler import InferenceScheduler
+from .outbox import AlertOutbox
+from .router import ModeRouter, RouterConfig
+from .scheduler import InferenceScheduler, InferenceTimeout, StaleFrameError
 from .zones import SEVERITY, Zone, level_for
 
 BOX_COLOR = (248, 189, 56)  # #38bdf8 (BGR)
@@ -64,6 +67,13 @@ class CameraWorker(threading.Thread):
         self._zone_transitions: dict[tuple[str, str], int] = {}
 
         self.latest_jpeg: bytes | None = None
+        # A clean copy of the last frame, so a dashboard can show the annotated
+        # and the untouched picture of the same camera side by side. The raw
+        # JPEG is encoded lazily: cameras nobody watches this way pay nothing.
+        self.latest_frame: np.ndarray | None = None
+        self._frame_seq = 0
+        self._raw_cache_seq = -1
+        self._raw_cache: bytes | None = None
         self.metrics: dict = {"status": "starting"}
         self.last_boxes = np.zeros((0, 4), np.float32)
         self._data_lock = threading.Lock()
@@ -77,6 +87,21 @@ class CameraWorker(threading.Thread):
         self.count_lines = list(cam.get("count_lines", []))
         self.line_counts = {line.get("id", line.get("name", "line")): {"entry": 0, "exit": 0}
                             for line in self.count_lines}
+        # --- improvement.md: mode router, analytics health, zone versioning ---
+        self.zone_version = int(cam.get("zones_version", 0))
+        self.router = ModeRouter(RouterConfig(
+            dense_box_height_px=config.DENSE_BOX_HEIGHT_PX,
+            hysteresis_frames=config.MODE_HYSTERESIS_FRAMES,
+        ))
+        self.analytics_health = AnalyticsHealth(cam["id"], AnalyticsHealthConfig())
+        self._density_result = None
+        self._density_error: str | None = None
+        self._last_density_ts = 0.0
+        self._line_history: deque = deque(maxlen=600)
+        self._route: dict = {}
+        self._last_detection = None
+        self._was_degraded = False
+        self._last_dense_advisory = 0.0
 
     # ------------------------------------------------------------------ #
     def _zone(self, d: dict) -> Zone:
@@ -194,10 +219,23 @@ class CameraWorker(threading.Thread):
         now = time.time()
         self._infer_ts.append(now)
 
-        boxes, confs = self.registry.scheduler.infer(self.cam["id"], frame)
+        try:
+            detection = self.registry.scheduler.infer(self.cam["id"], frame)
+        except StaleFrameError:
+            # Analysing a 2-second-old frame would show the operator a stale
+            # crowd level as if it were current: drop it, keep the feed live.
+            metrics.inc("godavari_frames_skipped_total", labels={"camera": self.cam["id"]})
+            return
+        except InferenceTimeout as exc:
+            self.analytics_health.record_inference(0, error=str(exc))
+            metrics.inc("godavari_frames_skipped_total", labels={"camera": self.cam["id"]})
+            return
+        self._last_detection = detection
+        boxes, confs = detection.boxes, detection.confidences
         dets = sv.Detections(
             xyxy=boxes, confidence=confs,
-            class_id=np.zeros(len(boxes), dtype=int),
+            class_id=(detection.class_ids if len(detection.class_ids) == len(boxes)
+                      else np.zeros(len(boxes), dtype=int)),
         )
         tracks = self.tracker.update_with_detections(dets)
         track_ids = tracks.tracker_id if len(tracks) else np.zeros(0, int)
@@ -262,6 +300,45 @@ class CameraWorker(threading.Thread):
 
         with self._data_lock:
             zones = list(self.zones)
+
+        # ---- density cross-check: advisory only, low rate, dense scenes ----
+        if now - self._last_density_ts >= config.DENSITY_PERIOD_S:
+            self._last_density_ts = now
+            try:
+                self._density_result = self.registry.density.estimate(
+                    frame, [z.to_dict() for z in zones])
+                self._density_error = None
+            except RuntimeError as exc:
+                self._density_result = None
+                self._density_error = str(exc)
+            metrics.set_gauge("godavari_density_estimate",
+                              self._density_result.total_count if self._density_result else 0.0,
+                              labels={"camera": self.cam["id"]})
+
+        # ---- confidence and mode router (before alerts, so an alert records
+        # the estimation mode of the frame that raised it) -------------------
+        # Track continuity = share of detections that got a stable identity.
+        # When it collapses, boxes are unreliable and the count must be marked
+        # degraded instead of presented as fact.
+        track_continuity = (n_tracks / len(boxes)) if len(boxes) else 1.0
+        with self._data_lock:
+            camera_health = self.frame_health.snapshot().get("status")
+        if config.MODE_ROUTER:
+            route = self.router.route(
+                detection,
+                track_continuity=track_continuity,
+                density=self._density_result,
+                density_error=self._density_error,
+                camera_health=camera_health,
+                calibrated_density_enabled=config.CALIBRATED_DENSITY_ENABLED,
+            )
+        else:
+            route = None
+        self._route = route.to_dict() if route is not None else {}
+        self.analytics_health.record_inference(len(boxes), now)
+        analytics = self.analytics_health.evaluate(now=now, worker_status="running",
+                                                   camera_health=camera_health)
+
         for i, tid in enumerate(tracked_ids):
             point = tracked_feet[i]
             current_zone = None
@@ -279,6 +356,12 @@ class CameraWorker(threading.Thread):
         # Drop stale tracker IDs so a recycled ByteTrack ID cannot bridge an old route.
         self._track_zone = {tid: val for tid, val in self._track_zone.items()
                             if now - val[1] <= 30}
+        degraded_count = self._route.get("mode") in ("dense", "unknown")
+        if degraded_count and not self._was_degraded:
+            # Do not carry sustain timers across a spell of untrusted counting.
+            self.engine.reset()
+        self._was_degraded = degraded_count
+
         zone_results = []
         for zone in zones:
             poly = (np.asarray(zone.polygon, np.float32) * [w, h]).astype(np.int32)
@@ -317,7 +400,26 @@ class CameraWorker(threading.Thread):
                 world_poly = np.asarray(zone.polygon, np.float32) * [w, h]
                 area_m2 = polygon_area_world(world_poly, self.calibration)
             zone.apply_count(inside, area, area_m2)
-            for alert in self.engine.update(zone):
+            # A lower-bound count cannot justify a capacity breach: in degraded
+            # modes the number is incomplete by construction, so the alert is
+            # replaced by one advisory (see below) instead of a false breach.
+            alerts = self.engine.update(zone)
+            if degraded_count:
+                alerts = []
+            for alert in alerts:
+                # Every alert carries the geometry/calibration/model versions it
+                # fired under, so an after-event audit can reconstruct it.
+                alert["zone_id"] = zone.id
+                alert["context"] = {
+                    "zones_version": self.zone_version,
+                    "calibration_version": (self.calibration or {}).get("version"),
+                    "estimation_mode": self._route.get("estimation_mode"),
+                    "count_source": self._route.get("count_source"),
+                    "detector_count": self._route.get("detector_count"),
+                    "density_count": self._route.get("density_count"),
+                    "model": (self._last_detection.model_name if self._last_detection else None),
+                    "model_version": (self._last_detection.model_version if self._last_detection else None),
+                }
                 store.add_alert(alert)
                 self.registry.push_alert(alert)
                 self.registry.dispatch_alert(alert)
@@ -330,6 +432,13 @@ class CameraWorker(threading.Thread):
                 "level": zone.level,
                 "flow": [round(vx, 4), round(vy, 4)], "moving": moving,
             })
+
+        for zr in zone_results:
+            zr["count_source"] = self._route.get("count_source")
+            zr["degraded"] = bool(self._route.get("degraded"))
+
+        if degraded_count:
+            self._maybe_dense_advisory(now, len(boxes), zones)
 
         total = int(len(boxes))
         self.total_count = total if self.total_count == 0 else self.total_count * 0.6 + total * 0.4
@@ -362,7 +471,24 @@ class CameraWorker(threading.Thread):
                 "heatmap": self.heatmap.encode(),
                 "health": self.frame_health.snapshot(),
                 "decoder": self.decoder,
-                "estimation_mode": "detector",
+                # --- improvement.md: explicit estimation state ------------
+                "estimation_mode": self._route.get("estimation_mode", "detector"),
+                "mode": self._route.get("mode"),
+                "selected_count": self._route.get("selected_count", total) if self._route else total,
+                "density_count": self._route.get("density_count"),
+                "count_source": self._route.get("count_source", "detector"),
+                "count_confidence": self._route.get("confidence", "medium"),
+                "degraded": bool(self._route.get("degraded")),
+                "review_required": bool(self._route.get("review_required")),
+                "degraded_reason": self._route.get("reason"),
+                # how the number was produced: plain pass or recovered detail tier
+                "tier": self._route.get("tier", "primary"),
+                "primary_count": self._route.get("primary_count"),
+                "route_detail": self._route,
+                "analytics_health": analytics,
+                "detector": (detection.to_dict() if detection is not None else None),
+                "zone_version": self.zone_version,
+                "throughput": self._throughput(now),
                 "count_lines": [{**line, **self.line_counts.get(line.get("id", line.get("name", "line")), {})}
                                 for line in self.count_lines],
             }
@@ -377,6 +503,73 @@ class CameraWorker(threading.Thread):
         if now - self._last_heatmap_ts >= 300:
             store.add_heatmap(self.cam["id"], now, self.metrics.get("heatmap") or {})
             self._last_heatmap_ts = now
+
+    def _maybe_dense_advisory(self, now: float, total: int, zones) -> None:
+        """One honest alert while counting is untrusted, instead of false breaches.
+
+        In a packed scene the recovered count is a lower bound, so a capacity
+        percentage computed from it is meaningless in both directions. The
+        operator gets told that counting is unreliable and that they must look,
+        which is the only safe instruction available.
+        """
+        if now - self._last_dense_advisory < config.DEFAULT_ALERT_COOLDOWN_S:
+            return
+        self._last_dense_advisory = now
+        detail = self._route.get("detail") or {}
+        primary = detail.get("primary_count")
+        reason = self._route.get("reason") or "counting unreliable"
+        message = (f"Dense crowd: {total} people detected is a lower bound, not a "
+                   f"count ({reason})")
+        if primary is not None:
+            message += f"; full-frame pass saw {primary}. Manual observation required."
+        else:
+            message += ". Manual observation required."
+        alert = {
+            "id": uuid.uuid4().hex[:10],
+            "cam_id": self.cam["id"],
+            "cam_name": self.cam.get("name"),
+            "zone": zones[0].name if zones else "Camera",
+            "level": "WARNING",
+            "message": message,
+            "ts": time.time(),
+            "zone_id": zones[0].id if zones else None,
+            "context": {
+                "zones_version": self.zone_version,
+                "estimation_mode": self._route.get("estimation_mode"),
+                "count_source": self._route.get("count_source"),
+                "detector_count": self._route.get("detector_count"),
+                "primary_count": primary,
+                "tier": detail.get("tier"),
+                "model": (self._last_detection.model_name if self._last_detection else None),
+                "model_version": (self._last_detection.model_version if self._last_detection else None),
+            },
+        }
+        store.add_alert(alert)
+        self.registry.push_alert(alert)
+        self.registry.dispatch_alert(alert)
+
+    def _throughput(self, now: float) -> dict:
+        """People per minute crossing each configured line.
+
+        For ghat management the rate of inflow matters more than the
+        instantaneous head-count: this is the number that predicts a surge.
+        """
+        snapshot = {k: dict(v) for k, v in self.line_counts.items()}
+        self._line_history.append((now, snapshot))
+        window = [h for h in self._line_history if now - h[0] <= 60.0]
+        if len(window) < 2:
+            return {}
+        t0, first = window[0]
+        t1, last = window[-1]
+        minutes = max((t1 - t0) / 60.0, 1e-6)
+        out = {}
+        for key, values in last.items():
+            prior = first.get(key, {})
+            entry = max(0, values.get("entry", 0) - prior.get("entry", 0))
+            exit_ = max(0, values.get("exit", 0) - prior.get("exit", 0))
+            out[key] = {"entry_per_min": round(entry / minutes, 1),
+                        "exit_per_min": round(exit_ / minutes, 1)}
+        return out
 
     def _rolling_infer_fps(self) -> float:
         ts = list(self._infer_ts)
@@ -395,6 +588,10 @@ class CameraWorker(threading.Thread):
         """
         with self._data_lock:
             boxes = self.last_boxes
+            # Copy BEFORE annotating: cv2.rectangle draws in place, so a copy
+            # taken afterwards would carry the boxes into the "clean" view.
+            self.latest_frame = frame.copy()
+            self._frame_seq += 1
 
         if self.show_detections:
             for box in boxes:
@@ -407,16 +604,50 @@ class CameraWorker(threading.Thread):
             with self._data_lock:
                 self.latest_jpeg = buf.tobytes()
 
+    def raw_jpeg(self) -> bytes | None:
+        """JPEG of the last frame without detection boxes, for split views."""
+        with self._data_lock:
+            frame, seq = self.latest_frame, self._frame_seq
+            if frame is not None and self._raw_cache_seq == seq:
+                return self._raw_cache
+            if frame is None:
+                return None
+        ok, buf = cv2.imencode(".jpg", frame,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), config.JPEG_QUALITY])
+        if not ok:
+            return None
+        data = buf.tobytes()
+        with self._data_lock:
+            self._raw_cache, self._raw_cache_seq = data, seq
+        return data
+
+
+def build_density_estimator():
+    """Density is opt-in: an unvalidated checkpoint must not silently count."""
+    if not config.DENSITY_MODEL:
+        return NullDensityEstimator()
+    try:
+        return TorchscriptDensityEstimator(config.DENSITY_MODEL,
+                                          validated=config.DENSITY_VALIDATED)
+    except Exception as exc:  # noqa: BLE001 - never block startup on density
+        store.add_audit("density.load.failed", "system", config.DENSITY_MODEL,
+                        {"error": str(exc)})
+        return NullDensityEstimator()
+
 
 class CameraRegistry:
     def __init__(self, model):
         self.model = model
-        self.scheduler = InferenceScheduler(model)
+        self.scheduler = InferenceScheduler(model, batch_size=config.BATCH_SIZE,
+                                           max_frame_age_ms=config.MAX_FRAME_AGE_MS)
         self._lock = threading.Lock()
         self.cameras: dict[str, dict] = {}
         self.workers: dict[str, CameraWorker] = {}
         self.alerts: deque = deque(maxlen=200)
-        self.dispatcher = AlertDispatcher()
+        self.density = build_density_estimator()
+        # Durable outbox: alerts survive restarts and long network outages.
+        self.outbox = AlertOutbox()
+        self.outbox.start()
         # Read the saved cameras immediately. Waiting until the model has loaded
         # meant an API call in those first seconds (add/delete/zone edit) saved a
         # registry that had not been restored yet, wiping cameras.json.
@@ -452,11 +683,20 @@ class CameraRegistry:
             cam = self.cameras.get(cam_id)
             if cam is None:
                 raise KeyError(cam_id)
+            # Geometry version: a zone redraw invalidates comparisons with
+            # history, so every alert records which version it fired under.
             cam["zones"] = cleaned
+            cam["zones_version"] = int(cam.get("zones_version", 0)) + 1
+            cam["zones_updated_at"] = time.time()
+            version = cam["zones_version"]
             worker = self.workers.get(cam_id)
         if worker:
+            worker.zone_version = version
             worker.set_zones(cleaned)
+            worker.router.reset()
         self.save()
+        store.add_audit("zones.update", "operator", cam_id,
+                        {"zones_version": version, "zone_count": len(cleaned)})
 
     def set_count_lines(self, cam_id: str, lines: list[dict]):
         with self._lock:
@@ -505,6 +745,7 @@ class CameraRegistry:
                 "name": cam["name"],
                 "source_type": cam["source_type"],
                 "zones": cam.get("zones", []),
+                "zones_version": int(cam.get("zones_version", 0)),
                 "count_lines": cam.get("count_lines", []),
                 "display": cam.get("display", {"detections": True}),
                 "status": status,
@@ -517,7 +758,16 @@ class CameraRegistry:
         self.alerts.append(alert)
 
     def dispatch_alert(self, alert: dict):
-        self.dispatcher.dispatch(alert)
+        self.outbox.enqueue(alert)
+
+    def analytics_snapshot(self) -> dict:
+        """Analytics health (model-side dead-man switch) for the dashboard."""
+        out = {}
+        for cam_id, worker in list(self.workers.items()):
+            out[cam_id] = worker.analytics_health.evaluate(
+                worker_status=(worker.metrics or {}).get("status", "running"),
+                camera_health=(worker.metrics or {}).get("health", {}).get("status"))
+        return out
 
     def recent_alerts(self, limit: int = 60) -> list[dict]:
         data = list(self.alerts)[-limit:]
