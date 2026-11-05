@@ -404,6 +404,10 @@ class CameraWorker(threading.Thread):
             # modes the number is incomplete by construction, so the alert is
             # replaced by one advisory (see below) instead of a false breach.
             alerts = self.engine.update(zone)
+            recovered = (zone.occupancy_pct < zone.warn_pct * 0.8
+                         and zone.raw_count < zone.capacity * 0.9)
+            if recovered:
+                self.registry.close_recovered_alerts(self.cam["id"], zone.id)
             if degraded_count:
                 alerts = []
             for alert in alerts:
@@ -420,6 +424,9 @@ class CameraWorker(threading.Thread):
                     "model": (self._last_detection.model_name if self._last_detection else None),
                     "model_version": (self._last_detection.model_version if self._last_detection else None),
                 }
+                evidence_path = self._save_alert_evidence(alert["id"], frame)
+                if evidence_path:
+                    alert["context"]["evidence"] = f"/api/alerts/{alert['id']}/evidence"
                 store.add_alert(alert)
                 self.registry.push_alert(alert)
                 self.registry.dispatch_alert(alert)
@@ -503,6 +510,28 @@ class CameraWorker(threading.Thread):
         if now - self._last_heatmap_ts >= 300:
             store.add_heatmap(self.cam["id"], now, self.metrics.get("heatmap") or {})
             self._last_heatmap_ts = now
+
+    @staticmethod
+    def _save_alert_evidence(alert_id: str, frame: np.ndarray) -> str | None:
+        """Persist one compressed frame for a rare alert, outside SQLite."""
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(alert_id)):
+            return None
+        try:
+            os.makedirs(config.EVIDENCE_DIR, exist_ok=True)
+            ok, encoded = cv2.imencode(".jpg", frame,
+                                       [cv2.IMWRITE_JPEG_QUALITY, 75])
+            if not ok:
+                return None
+            path = os.path.join(config.EVIDENCE_DIR, f"{alert_id}.jpg")
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as output:
+                output.write(encoded.tobytes())
+            os.replace(tmp, path)
+            return path
+        except OSError:
+            metrics.inc("godavari_alert_evidence_write_failures_total")
+            return None
 
     def _maybe_dense_advisory(self, now: float, total: int, zones) -> None:
         """One honest alert while counting is untrusted, instead of false breaches.
@@ -657,6 +686,8 @@ class CameraRegistry:
     def add(self, cfg: dict, persist: bool = True):
         with self._lock:
             self.cameras[cfg["id"]] = cfg
+            if cfg.get("profile"):
+                self.model.set_camera_profile(cfg["id"], cfg["profile"])
             worker = CameraWorker(cfg, self.model, self)
             self.workers[cfg["id"]] = worker
         worker.start()
@@ -666,11 +697,36 @@ class CameraRegistry:
     def remove(self, cam_id: str):
         with self._lock:
             worker = self.workers.pop(cam_id, None)
-            self.cameras.pop(cam_id, None)
+            camera = self.cameras.pop(cam_id, None)
         if worker:
             worker.stop()
             worker.join(timeout=4)
+        try:
+            self.model.set_camera_profile(cam_id, "global")
+        except (AttributeError, ValueError):
+            pass
         self.save()
+        from .mongo_sync import mirror
+        mirror.delete("cameras", cam_id)
+        uploaded_file_deleted = False
+        if camera and camera.get("source_type") == "file" and camera.get("path"):
+            source_path = os.path.realpath(config.resolve_media(camera["path"]))
+            uploads_root = os.path.realpath(config.UPLOADS_DIR)
+            try:
+                is_managed_upload = os.path.commonpath((uploads_root, source_path)) == uploads_root
+            except ValueError:
+                is_managed_upload = False
+            with self._lock:
+                remaining_paths = {os.path.realpath(c.get("path", ""))
+                                   for c in self.cameras.values() if c.get("path")}
+                if (is_managed_upload and source_path not in remaining_paths
+                        and os.path.isfile(source_path)):
+                    os.remove(source_path)
+                    uploaded_file_deleted = True
+        from . import store
+        store.add_audit("camera.remove", "operator", cam_id,
+                        {"name": camera.get("name"),
+                         "uploaded_file_deleted": uploaded_file_deleted} if camera else {})
 
     def set_zones(self, cam_id: str, zone_dicts: list[dict]):
         cleaned = []
@@ -721,6 +777,16 @@ class CameraRegistry:
             worker.show_detections = cam["display"]["detections"]
         self.save()
 
+    def set_camera_profile(self, cam_id: str, profile: str):
+        with self._lock:
+            cam = self.cameras.get(cam_id)
+            if cam is None:
+                raise KeyError(cam_id)
+            cam["profile"] = profile
+            self.model.set_camera_profile(cam_id, profile)
+        self.save()
+        store.add_audit("camera.profile", "operator", cam_id, {"profile": profile})
+
     def get(self, cam_id: str) -> dict:
         with self._lock:
             return self.cameras.get(cam_id)
@@ -748,6 +814,7 @@ class CameraRegistry:
                 "zones_version": int(cam.get("zones_version", 0)),
                 "count_lines": cam.get("count_lines", []),
                 "display": cam.get("display", {"detections": True}),
+                "profile": cam.get("profile", "global"),
                 "status": status,
                 "detail": (metrics_snapshot.get("detail") if metrics_snapshot else None),
                 "metrics": metrics_snapshot,
@@ -756,6 +823,20 @@ class CameraRegistry:
 
     def push_alert(self, alert: dict):
         self.alerts.append(alert)
+
+    def close_recovered_alerts(self, cam_id: str, zone_id: str):
+        closed = store.close_recovered_zone_alerts(cam_id, zone_id)
+        if not closed:
+            return
+        now = time.time()
+        for alert in self.alerts:
+            if (alert.get("cam_id") == cam_id and alert.get("zone_id") == zone_id
+                    and alert.get("status", "open") == "open"
+                    and alert.get("level") in ("WARNING", "OVERCROWDED")):
+                alert.update(status="closed", closed_by="system:recovery", closed_ts=now)
+        metrics.inc("godavari_alerts_auto_closed_total", closed)
+        store.add_audit("alert.auto_close", "system:recovery", zone_id,
+                        {"camera_id": cam_id, "count": closed})
 
     def dispatch_alert(self, alert: dict):
         self.outbox.enqueue(alert)
@@ -786,6 +867,9 @@ class CameraRegistry:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(cams, fh, indent=2)
         os.replace(tmp, self._config_path())
+        from .mongo_sync import mirror_camera
+        for cam in cams:
+            mirror_camera(cam)
 
     def _load_config(self):
         """Restore saved cameras into memory (no workers yet)."""

@@ -80,6 +80,9 @@ class DetailPass(DetectorAdapter):
     def inner(self):            # keeps ModelManager.set_profile working
         return self.core
 
+    def set_profile(self, conf: float | None = None, imgsz: int | None = None):
+        self.core.set_profile(conf=conf, imgsz=imgsz)
+
     @property
     def spec(self) -> ModelSpec:
         return self.core.spec

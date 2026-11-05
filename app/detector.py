@@ -40,6 +40,7 @@ class ModelManager:
         self.half = self.device != "cpu"
         self.loaded_at: float | None = None
         self.switch_count = 0
+        self.camera_profiles: dict[str, str] = {}
         self.tiling_policy = TilingPolicy(
             enabled=config.TILING != "off",
             rows=config.TILE_ROWS, cols=config.TILE_COLS,
@@ -104,10 +105,49 @@ class ModelManager:
     # ------------------------------------------------------------------ #
     def detect_batch(self, frames,
                      camera_ids: list[str] | None = None) -> list[DetectionResult]:
-        adapter = self.model  # atomic read: an in-flight batch keeps its model
-        if adapter is None:
-            raise RuntimeError("model not loaded")
-        return adapter.detect_batch(frames, camera_ids=camera_ids)
+        ids = list(camera_ids or [""] * len(frames))
+        if len(ids) != len(frames):
+            raise ValueError("camera_ids must match the frame batch")
+        with self.lock:
+            adapter = self.model
+            if adapter is None:
+                raise RuntimeError("model not loaded")
+            groups: dict[str, list[int]] = {}
+            for index, camera_id in enumerate(ids):
+                groups.setdefault(self.camera_profiles.get(camera_id, "global"), []).append(index)
+            out: list[DetectionResult | None] = [None] * len(frames)
+            for profile, indexes in groups.items():
+                if profile == "global":
+                    conf, imgsz = self.conf, self.imgsz
+                else:
+                    conf, imgsz = self._profile_settings(profile)
+                target = adapter
+                while callable(getattr(target, "set_profile", None)) is False:
+                    target = getattr(target, "inner", getattr(target, "core", None))
+                    if target is None:
+                        break
+                if target is not None:
+                    target.set_profile(conf=conf, imgsz=imgsz)
+                results = adapter.detect_batch([frames[i] for i in indexes],
+                                               camera_ids=[ids[i] for i in indexes])
+                for index, result in zip(indexes, results):
+                    out[index] = result
+            return [item for item in out if item is not None]
+
+    def _profile_settings(self, profile: str) -> tuple[float, int]:
+        settings = {"balanced": (0.30, 640), "dense": (0.15, 1280), "custom": None}
+        if profile not in settings:
+            raise ValueError("profile must be balanced, dense, or custom")
+        return settings[profile] if settings[profile] is not None else (self.conf, self.imgsz)
+
+    def set_camera_profile(self, camera_id: str, profile: str):
+        if profile not in ("global", "balanced", "dense", "custom"):
+            raise ValueError("profile must be global, balanced, dense, or custom")
+        with self.lock:
+            if profile == "global":
+                self.camera_profiles.pop(camera_id, None)
+            else:
+                self.camera_profiles[camera_id] = profile
 
     def detect(self, frame) -> DetectionResult:
         return self.detect_batch([frame])[0]

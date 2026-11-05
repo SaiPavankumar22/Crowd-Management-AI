@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, ingest, metrics
+from .mongo_sync import mirror as mongo_mirror, mirror_camera
 from .calibration import validate_calibration
 from .detector import ModelManager
 from .pipeline import CameraRegistry, new_camera_id
@@ -27,6 +28,9 @@ START_TS = time.time()
 
 @app.on_event("startup")
 async def startup():
+    mongo_mirror.start()
+    for camera in list(registry.cameras.values()):
+        mirror_camera(camera)
     asyncio.create_task(_bootstrap())
 
 
@@ -70,6 +74,7 @@ def system_info() -> dict:
     info["scheduler"] = registry.scheduler.stats()
     info["outbox"] = registry.outbox.stats()
     info["density"] = registry.density.info()
+    info["mongodb"] = mongo_mirror.status()
     return info
 
 
@@ -172,6 +177,19 @@ async def get_camera(cam_id: str):
     raise HTTPException(404, "camera not found")
 
 
+@app.put("/api/cameras/{cam_id}/profile")
+async def set_camera_profile(cam_id: str, request: Request):
+    if registry.get(cam_id) is None:
+        raise HTTPException(404, "camera not found")
+    try:
+        body = await request.json()
+        profile = str(body.get("profile", "")).strip().lower()
+        registry.set_camera_profile(cam_id, profile)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, str(exc) or "body must contain a profile")
+    return {"ok": True, "camera_id": cam_id, "profile": profile}
+
+
 @app.delete("/api/cameras/{cam_id}")
 async def delete_camera(cam_id: str):
     if registry.get(cam_id) is None:
@@ -254,6 +272,19 @@ async def list_samples():
 async def get_alerts(limit: int = 100):
     limit = max(1, min(limit, 500))
     return store_recent_alerts(limit)
+
+
+@app.get("/api/alerts/{alert_id}/evidence")
+async def alert_evidence(alert_id: str):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", alert_id):
+        raise HTTPException(404, "evidence not found")
+    from pathlib import Path
+    evidence = Path(config.EVIDENCE_DIR) / f"{alert_id}.jpg"
+    if not evidence.is_file():
+        raise HTTPException(404, "evidence not found")
+    return FileResponse(evidence, media_type="image/jpeg",
+                        filename=f"alert-{alert_id}.jpg")
 
 
 def store_recent_alerts(limit: int):
@@ -422,6 +453,24 @@ async def ack_alert(alert_id: str, request: Request):
     return {"ok": True, **row}
 
 
+@app.post("/api/alerts/{alert_id}/close")
+async def close_alert(alert_id: str, request: Request):
+    """Close an alert and retain who closed it for the audit trail."""
+    by = "operator"
+    try:
+        body = await request.json()
+        by = str(body.get("by") or by)[:60]
+    except Exception:
+        pass
+    from . import store
+    if not store.close_alert(alert_id, by):
+        if not any(alert["id"] == alert_id for alert in store.recent_alerts(500)):
+            raise HTTPException(404, "alert not found")
+        return {"ok": True, "id": alert_id, "status": "closed"}
+    store.add_audit("alert.close", by, alert_id, {})
+    return {"ok": True, "id": alert_id, "status": "closed", "closed_by": by}
+
+
 @app.post("/api/alerts/{alert_id}/escalate")
 async def escalate_alert(alert_id: str):
     ok = registry.outbox.escalate(alert_id)
@@ -566,14 +615,16 @@ async def heatmap_history(cam_id: str, hours: int = 24, limit: int = 500):
 
 @app.get("/api/reports/daily.pdf")
 @app.get("/api/reports/event.pdf")
-async def daily_pdf(hours: int = 24):
+async def daily_pdf(request: Request, hours: int = 24):
     from . import store
     from datetime import datetime, timezone
-    hours = max(1, min(hours, 24 * 7))
+    is_daily = request.url.path.endswith("/daily.pdf")
+    hours = 24 if is_daily else max(1, min(hours, 24 * 7))
     rows = store.history(time.time() - hours * 3600)
     alerts = store.recent_alerts(500)
     alerts = [a for a in alerts if a["ts"] >= time.time() - hours * 3600]
-    lines = [f"Godavari Crowd Monitor - Operations Report ({hours}h)",
+    report_kind = "Daily" if is_daily else "Event"
+    lines = [f"Godavari Crowd Monitor - {report_kind} Operations Report ({hours}h)",
              datetime.now(timezone.utc).strftime("UTC %Y-%m-%d"),
              f"Samples captured: {len(rows)}", f"Alerts: {len(alerts)}", "",
              "Camera summary (latest sampled count):"]
@@ -599,14 +650,24 @@ async def daily_pdf(hours: int = 24):
     lines.extend([f"{cid}: {a} -> {b}: {n}" for (cid, a, b), n in move_totals.items()] or ["No zone transitions recorded."])
     lines.extend(["", "Recent alerts:"])
     lines.extend([f"{a['level']} | {a['cam_name']} | {a['zone']} | {a['message']}" for a in alerts[-20:]] or ["No alerts in this period."])
-    # Small single-page PDF writer keeps reporting dependency-free.
+    # Small dependency-free PDF writer. Split long reports over pages instead
+    # of silently dropping everything after the first 52 lines.
     esc_pdf = lambda s: str(s).encode("latin-1", "replace").decode("latin-1").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    content = "BT /F1 10 Tf 48 790 Td 13 TL " + " ".join(f"({esc_pdf(line[:110])}) Tj T*" for line in lines[:52]) + " ET"
-    objects = ["<< /Type /Catalog /Pages 2 0 R >>",
-               "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-               "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-               f"<< /Length {len(content.encode('latin-1'))} >>\nstream\n{content}\nendstream"]
+    page_lines = [lines[i:i + 52] for i in range(0, len(lines), 52)] or [[]]
+    page_ids = [4 + i * 2 for i in range(len(page_lines))]
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>", None,
+               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>"
+    for page_id, chunk in zip(page_ids, page_lines):
+        content_id = page_id + 1
+        content = "BT /F1 10 Tf 48 790 Td 13 TL " + " ".join(
+            f"({esc_pdf(line[:110])}) Tj T*" for line in chunk) + " ET"
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>")
+        objects.append(
+            f"<< /Length {len(content.encode('latin-1'))} >>\nstream\n{content}\nendstream")
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = [0]
     for i, obj in enumerate(objects, 1):
@@ -615,4 +676,4 @@ async def daily_pdf(hours: int = 24):
     for off in offsets[1:]: pdf.extend(f"{off:010d} 00000 n \n".encode())
     pdf.extend(f"trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
     return Response(bytes(pdf), media_type="application/pdf",
-                    headers={"Content-Disposition": f"attachment; filename=godavari-{hours}h-report.pdf"})
+                    headers={"Content-Disposition": f"attachment; filename=godavari-{report_kind.lower()}-{hours}h-report.pdf"})
