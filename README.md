@@ -104,6 +104,21 @@ volume, so containers are disposable. Full instructions — Nebius GPU VM walkth
 TLS + password proxy, backups, upgrades, troubleshooting — are in
 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
+When `MONGODB_URL` and `MONGODB_DB_NAME` are set in the root `.env`, Docker Compose and
+`python run.py` load them automatically. SQLite remains the local source of truth; a
+background worker mirrors cameras (without source paths/credentials), alerts, audit
+events, count samples and heatmaps to MongoDB collections. Uploaded video and evidence
+remain on the local volume. MongoDB outages do not stop inference or local writes; check
+`mongodb` in `/api/system` for archive connection and queue status.
+This Nebius deployment's existing SQLite history has been migrated to Atlas. For another
+deployment, migrate history with `python tools/migrate_sqlite_to_mongo.py --apply` (run
+inside the container with `--sqlite /app/.data/data/crowd.db --cameras
+/app/.data/data/cameras.json`). The migration uses idempotent upserts and can be rerun
+safely.
+
+Removing a source stops its worker and removes its saved camera entry. An uploaded video
+is deleted from `uploads/` when no other source uses it; bundled sample clips are kept.
+
 > The dashboard has **no authentication**. Publish it on loopback and put a proxy with a
 > password in front before anyone else can reach it.
 
@@ -162,7 +177,7 @@ timeline) live there instead of competing with the camera.
 | **Stage** | The camera in the selected view, HUD with smoothed people-in-frame, trust badge, FPS and source |
 | **KPIs** | People across all sources, tracked identities, inference rate, areas at risk — each with a sparkline |
 | **Trend** | Occupancy history with alert markers, so you can see the run-up to a breach |
-| **Inspector · Alerts** | Live alerts plus persisted history and the acknowledge action, with an unacknowledged counter on the tab |
+| **Inspector · Alerts** | Persisted alert history with acknowledge and close lifecycle, plus an unacknowledged counter |
 | **Inspector · Areas & gates** | Steps to draw an area, the per-area ring gauge / level / capacity / flow / sparkline, and gate-line entry-exit counts |
 | **Inspector · Trust** | Per-camera analytics health: measured, degraded or stale, and why |
 | **Wall view** | All cameras as tiles with count and level, for a control-room display |
@@ -209,6 +224,16 @@ the same after a restart, and every alert records which version it fired under. 
 splits the frame into equal areas in one step. A **gate line** is two clicks: it then counts
 people crossing it in each direction (`↑` entries, `↓` exits), and both areas and gate lines
 can be removed from their rows in the same tab.
+
+The tab also has a ground-plane calibration wizard. Click four visible points
+around the measured ground area, then enter each point's surveyed X/Y position
+in metres. Use measured coordinates; the wizard cannot validate a camera's
+survey accuracy for you.
+
+Each camera also has a profile selector in **This source**. `balanced`, `dense`
+and `custom` are applied by the shared inference worker per camera; `global`
+inherits the engine profile. Dense mode uses larger inference images and raises
+compute cost, so compare it on the target GPU before assigning it broadly.
 
 Clicks are mapped to the video frame itself: the stage adopts the source's real aspect ratio,
 so a 2.15:1 camera is not letterboxed inside a 16:9 box and a corner you click is the corner
@@ -371,6 +396,8 @@ Every setting is an environment variable; nothing needs editing in code.
 | `CROWD_DATA_DIR` | `./data` | `cameras.json`, `crowd.db` (dev scripts and Docker point this at `.data/data`) |
 | `CROWD_UPLOADS_DIR` | `./uploads` | Uploaded clips |
 | `CROWD_SAMPLES_DIR` | `./samples` | Sample library (subfolders become picker groups) |
+| `MONGODB_URL` | empty | Optional MongoDB Atlas URI; loaded from root `.env` |
+| `MONGODB_DB_NAME` | `godavari` | MongoDB database used for the best-effort archive |
 
 ---
 
@@ -385,7 +412,7 @@ NOC dashboard can drive it.
 | `POST` | `/api/cameras` | Add one: multipart `file=`, or form `sample=` / `source=`, plus `name=`, `loop=` |
 | `GET` | `/api/cameras/{id}` | One camera |
 | `GET` | `/api/cameras/{id}/diagnostics` | Camera health, decoder and timing diagnostics |
-| `DELETE` | `/api/cameras/{id}` | Stop and remove |
+| `DELETE` | `/api/cameras/{id}` | Stop and remove; delete an unshared uploaded video |
 | `PUT` | `/api/cameras/{id}/zones` | Replace areas: `{"zones":[{name, polygon, capacity, warn_pct}]}` (bumps `zones_version`) |
 | `PUT` | `/api/cameras/{id}/count-lines` | Replace gate lines: `{"lines":[{name, a, b, entry_side}]}` |
 | `PUT` | `/api/cameras/{id}/display` | Bake detection boxes into the stream or not: `{"detections": true}` |
@@ -401,11 +428,14 @@ NOC dashboard can drive it.
 | `GET` | `/api/models/{name}/status` | One model's load/warm state |
 | `PUT` | `/api/models` | Hot-swap a model (warm first, audit-logged) |
 | `POST` | `/api/alerts/{id}/ack` | Acknowledge an alert (`{"by": "..."}`) |
+| `POST` | `/api/alerts/{id}/close` | Close an alert with operator attribution after review |
+| `GET` | `/api/alerts/{id}/evidence` | Retrieve the alert-time JPEG frame when evidence capture succeeded |
 | `POST` | `/api/alerts/{id}/escalate` | Escalate an unacknowledged alert |
 | `GET` | `/api/outbox` | Durable delivery queue state |
 | `GET` | `/api/audit` | Model, zone and calibration change trail |
 | `GET` | `/api/analytics/health` | Per-camera analytics dead-man / drift state |
-| `PUT` | `/api/cameras/{id}/calibration` | Save ground-plane calibration points |
+| `PUT` | `/api/cameras/{id}/calibration` | Save versioned ground-plane calibration points |
+| `PUT` | `/api/cameras/{id}/profile` | Set a persistent per-camera `global`, `balanced`, `dense`, or `custom` detector profile |
 | `WS` | `/ws` | Full snapshot (cameras + alerts + system) at `CROWD_WS_PERIOD` |
 
 ```bash

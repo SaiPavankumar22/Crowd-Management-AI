@@ -342,7 +342,22 @@
       </div>
 
       <div class="card">
+        <div class="card-head"><h2>Ground calibration</h2></div>
+        <p class="muted sm note">Select four ground points, then enter each point’s measured X/Y coordinates in metres. Use surveyed distances; calibration affects reported area density.</p>
+        <button id="btn-calibrate" class="btn ghost sm">＋ Calibrate ground plane</button>
+        <p id="calibration-note" class="muted sm note" aria-live="polite">No calibration wizard started.</p>
+      </div>
+
+      <div class="card">
         <div class="card-head"><h2>This source</h2></div>
+        <label class="fld">Detection profile for this camera
+          <select id="camera-profile">
+            <option value="global">Use global profile</option>
+            <option value="balanced">Balanced</option>
+            <option value="dense">Dense</option>
+            <option value="custom">Use global custom settings</option>
+          </select>
+        </label>
         <button id="btn-del-cam" class="btn ghost sm danger">Remove this source</button>
       </div>
     </section>

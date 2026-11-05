@@ -25,6 +25,35 @@ This plan prefers:
 - Graceful degradation when a camera, model or network fails.
 - Models and checkpoints with clear commercial-use terms.
 
+## Implementation status (reviewed 2026-11-06)
+
+**This document is not complete and should not be deleted.** The current branch
+contains a useful single-service foundation, but the production rollout and
+several capability acceptance criteria below are still outstanding. The
+implementation lists in this document describe delivered foundations, not
+proof that the system is validated for operational safety use.
+
+| Capability | Current status | Still needed |
+|---|---|---|
+| Camera and analytics health | Foundation implemented | Per-camera recovery policy and operational validation |
+| Track-based zone counts | Implemented in the live pipeline | Validate continuity and count error on representative footage |
+| Alert delivery and storage | Durable webhook outbox, retry, acknowledgement, escalation, attributed closure and JPEG evidence links implemented; SQLite remains canonical, MongoDB Atlas archive is connected, tested, and existing history migrated | Other delivery adapters; evidence retention/access controls for operational deployment |
+| Dense-scene handling | Router and optional density adapter implemented | Cleared checkpoint, authorized camera-specific validation, approval before primary use |
+| Calibration | API, versioning, world-area metrics and four-point dashboard wizard implemented | Camera-specific validation against surveyed measurements |
+| Runtime model management | Registry, audited hot swap, and persistent per-camera detector profiles implemented | Per-camera model-weight policies and production resource controls |
+| Image quality | Stale/frozen/quality measurements surfaced | Per-camera thresholds, quality history and incident evidence |
+| Scheduling | Bounded queues, batching and stale-frame shedding implemented | Process isolation and production-scale validation |
+| Hardware decoding | Backend selection with fallback implemented | Verified NVDEC deployment and equivalence/latency benchmarks |
+| Observability | Health APIs, Prometheus metrics and JSON log mode implemented; Docker enables structured logs | Production dashboards and site-specific deployment integration |
+| Offline evaluation | Full 2,000-frame CUHK Mall labeled detector-count benchmark completed for YOLO26n and YOLOv8x; results and per-frame CSVs are stored locally under `data/benchmarks/mall/results/` | Representative, authorized ghat footage; tracking, zone, alert-latency and recovery metrics |
+| Event-scale architecture and governance | Single-VM Docker deployment path; SQLite plus optional Mongo archive; design documented | Edge/district/central deployment, security controls, benchmark promotion and operational sign-off |
+
+The scale path in this plan and [the production architecture](PRODUCTION_ARCHITECTURE.md)
+is still proposed. In particular, MediaMTX/NVDEC worker shards, Triton, shared
+event transport, TimescaleDB, SSE fan-out, server-side mosaic, cross-camera
+identity handoff, production governance and the Pushkaralu operational pilot
+are not implemented by the current single-process application.
+
 Fine-tuning on Pushkaralu footage is intentionally deferred. The first release
 uses pretrained models, configuration, calibration, careful routing and
 operator-visible confidence. Fine-tuning becomes a later optimization after
@@ -106,6 +135,25 @@ not listed as implemented above remain proposed work and require their own
 acceptance checks. Implement and validate them in stages; do not treat the
 document as authorization to use unvalidated estimates for safety-critical
 decisions.
+
+### Labeled benchmark update (2026-11-06)
+
+The CUHK Mall research dataset provides 2,000 fixed-webcam frames with manual
+per-frame head-count annotations. On the Nebius RTX PRO 6000, the existing
+person-box counting path substantially undercounted this indoor dense-scene set:
+YOLO26n MAE **15.99 people/frame** (WAPE **51.3%**) and YOLOv8x MAE **16.79
+people/frame** (WAPE **53.9%**). The larger model was slower and did not improve
+counts at the tested confidence and image-size settings. These are detector box
+counts compared with head-count labels, so they are useful evidence of a domain
+mismatch, not a fair measure of the whole tracked-zone pipeline. Do not tune
+operational alert limits from these results.
+
+Dataset archive, extracted frames, a 2 fps review video, benchmark code and
+per-frame outputs are kept in `data/benchmarks/mall/`. The dataset is marked
+research-only and must not be used commercially. This indoor dataset does not
+validate outdoor ghat cameras or safety use. See
+[`data/benchmarks/mall/SOURCE.md`](../data/benchmarks/mall/SOURCE.md) and
+[`data/benchmarks/mall/results/README.md`](../data/benchmarks/mall/results/README.md).
 
 ## Target architecture
 

@@ -58,6 +58,7 @@ const state = {
   focusZoneId: null,
   draw: { active: false, pts: [] },
   lineDraw: { active: false, pts: [] },
+  calibrationDraw: { active: false, pts: [] },
   panel: "cameras",
   inspector: "alerts",
   camView: "boxes",
@@ -139,6 +140,7 @@ function bindUI() {
     }
   };
   $("btn-count-line").onclick = startCountLineDrawing;
+  $("btn-calibrate").onclick = startCalibrationDrawing;
   $("heatmap-camera").onchange = loadHeatmapHistory;
   $("heatmap-range").oninput = (e) => renderArchivedHeatmap(Number(e.target.value));
   $("btn-heatmap-play").onclick = toggleHeatmapPlayback;
@@ -156,6 +158,25 @@ function bindUI() {
     saveZones([]);
   };
   $("btn-del-cam").onclick = deleteCamera;
+  $("camera-profile").onchange = async (event) => {
+    const cam = selectedCam();
+    if (!cam) return;
+    const select = event.target;
+    select.disabled = true;
+    try {
+      const response = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/profile`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: select.value }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not update camera profile");
+      cam.profile = data.profile;
+      toastOk("Camera profile saved", `${esc(cam.name)} now uses ${esc(data.profile)}.`);
+    } catch (err) {
+      alert(err.message);
+      select.value = cam.profile || "global";
+    } finally { select.disabled = false; }
+  };
   $("chk-sound").onchange = (e) => { state.soundOn = e.target.checked; };
   $("detector-profile").onchange = async (e) => {
     const select = e.target;
@@ -857,6 +878,11 @@ function renderCams() {
 function renderStage() {
   const cam = selectedCam();
   const m = (cam && cam.metrics) || {};
+  const profileSelect = $("camera-profile");
+  if (profileSelect) {
+    profileSelect.disabled = !cam;
+    if (cam && document.activeElement !== profileSelect) profileSelect.value = cam.profile || "global";
+  }
   const has = !!cam;
   if (cam && cam.display && typeof cam.display.detections === "boolean") {
     state.overlays.detections = cam.display.detections;
@@ -1034,6 +1060,9 @@ function drawOverlay() {
   if (cam && state.overlays.countLines) drawCountLines(ctx, m, W, H);
   if (state.draw.active) drawDraft(ctx, W, H);
   if (state.lineDraw.active) drawCountLineDraft(ctx, state.lineDraw.pts, W, H);
+  if (state.calibrationDraw.active || state.calibrationDraw.pts.length) {
+    drawCalibrationPoints(ctx, state.calibrationDraw.pts, W, H);
+  }
 }
 
 function buildHeatLut() {
@@ -1618,6 +1647,16 @@ function overlayClick(ev) {
   const rect = $("stage").getBoundingClientRect();
   const x = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
   const y = clamp((ev.clientY - rect.top) / rect.height, 0, 1);
+  if (state.calibrationDraw.active) {
+    state.calibrationDraw.pts.push([+x.toFixed(5), +y.toFixed(5)]);
+    const n = state.calibrationDraw.pts.length;
+    $("calibration-note").textContent = n < 4
+      ? `Point ${n} saved · click ${4 - n} more ground-plane point${n === 3 ? "" : "s"}`
+      : "Four points selected · enter their real-world coordinates";
+    drawOverlay();
+    if (n >= 4) finishCalibrationDrawing();
+    return;
+  }
   if (state.lineDraw.active) {
     state.lineDraw.pts.push([+x.toFixed(4), +y.toFixed(4)]);
     if (state.lineDraw.pts.length === 2) {
@@ -1639,6 +1678,71 @@ function overlayClick(ev) {
   }
   state.draw.pts.push([+x.toFixed(4), +y.toFixed(4)]);
   updateDrawBanner();
+  drawOverlay();
+}
+
+function drawCalibrationPoints(ctx, points, W, H) {
+  points.forEach(([x, y], i) => {
+    const px = x * W, py = y * H;
+    ctx.beginPath(); ctx.arc(px, py, 8, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(34,211,238,.9)"; ctx.fill();
+    ctx.strokeStyle = "#06111d"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(String(i + 1), px, py);
+  });
+}
+
+function startCalibrationDrawing() {
+  const cam = selectedCam();
+  if (!cam) return;
+  const size = cam.metrics?.frame_size;
+  if (!size || !size[0] || !size[1]) {
+    alert("Wait for this camera's first frame before calibrating.");
+    return;
+  }
+  if (state.draw.active || state.lineDraw.active) cancelDraw();
+  state.calibrationDraw = { active: true, pts: [] };
+  $("calibration-note").textContent = "Click four visible ground points in order around the area.";
+  $("stage").classList.add("drawing");
+  drawOverlay();
+}
+
+async function finishCalibrationDrawing() {
+  const cam = selectedCam();
+  const points = state.calibrationDraw.pts.slice(0, 4);
+  state.calibrationDraw.active = false;
+  $("stage").classList.remove("drawing");
+  if (!cam || points.length !== 4) return;
+  const world = [];
+  for (let i = 0; i < points.length; i++) {
+    const x = prompt(`Ground point ${i + 1}: real-world X in metres`);
+    if (x === null || !x.trim() || !Number.isFinite(Number(x))) { cancelCalibrationDrawing(); return; }
+    const y = prompt(`Ground point ${i + 1}: real-world Y in metres`);
+    if (y === null || !y.trim() || !Number.isFinite(Number(y))) { cancelCalibrationDrawing(); return; }
+    world.push([Number(x), Number(y)]);
+  }
+  const [width, height] = cam.metrics.frame_size;
+  const image = points.map(([x, y]) => [x * width, y * height]);
+  try {
+    const response = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/calibration`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_points: image, world_points: world, validated_by: "operator" }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Calibration could not be saved");
+    $("calibration-note").textContent = `Saved calibration v${data.calibration.version} · ${data.calibration.inliers} points. Verify against measured ground distances.`;
+    toastOk("Calibration saved", "Check that the selected points follow the perimeter and match measured distances.");
+  } catch (err) {
+    $("calibration-note").textContent = `Calibration failed: ${err.message}`;
+  }
+  drawOverlay();
+}
+
+function cancelCalibrationDrawing() {
+  state.calibrationDraw = { active: false, pts: [] };
+  $("stage").classList.remove("drawing");
+  $("calibration-note").textContent = "Calibration cancelled.";
   drawOverlay();
 }
 
@@ -1785,12 +1889,28 @@ async function addCamera() {
 async function deleteCamera() {
   const cam = selectedCam();
   if (!cam) return;
-  if (!confirm(`Remove "${cam.name}" from monitoring?`)) return;
-  await fetch(`/api/cameras/${cam.id}`, { method: "DELETE" });
-  state.selectedId = null;
-  state.zoneRows.clear();
-  $("zone-list").innerHTML = "";
-  renderAll();
+  if (!confirm(`Remove "${cam.name}" from monitoring? An uploaded video used only by this source will also be deleted.`)) return;
+  const button = $("btn-del-cam");
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try { detail = (await response.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    state.cameras = state.cameras.filter((item) => item.id !== cam.id);
+    state.selectedId = state.cameras[0]?.id || null;
+    state.zoneRows.clear();
+    $("zone-list").innerHTML = "";
+    renderAll();
+  } catch (error) {
+    alert(`Could not remove source: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /* ------------------------------------------------------------- chips --- */
@@ -1987,13 +2107,13 @@ function renderAlerts() {
   const list = state.alerts.slice(0, 40).sort((a, b) =>
     (LEVEL_ORDER[b.level] ?? 0) - (LEVEL_ORDER[a.level] ?? 0) || b.ts - a.ts).slice(0, 30);
   const acked = state.acked || (state.acked = new Set());
-  const open = state.alerts.filter((a) => !a.ack_by && !acked.has(a.id)).length;
+  const open = state.alerts.filter((a) => a.status !== "closed" && !a.ack_by && !acked.has(a.id)).length;
   const badge = $("alert-badge");
   if (badge) {
     badge.textContent = String(open);
     badge.dataset.zero = open ? "0" : "1";
   }
-  const key = list.map((a) => a.id + (acked.has(a.id) ? "^" : "")).join("|");
+  const key = list.map((a) => `${a.id}:${a.status || "open"}:${a.ack_by || (acked.has(a.id) ? "ack" : "")}`).join("|");
   if (key === state.alertsKey) return;
   state.alertsKey = key;
 
@@ -2007,18 +2127,24 @@ function renderAlerts() {
     const when = new Date(a.ts * 1000).toLocaleTimeString([], { hour12: false });
     const lvl = a.level || "WARNING";
     const isAcked = acked.has(a.id) || !!a.ack_by;
+    const isClosed = a.status === "closed";
     const ctx = a.context || {};
     const mode = ctx.estimation_mode && ctx.estimation_mode !== "detector"
       ? `<span class="a-mode">${esc(String(ctx.estimation_mode).replace(/_/g, " "))}</span>` : "";
-    return `<div class="alert ${lvl} ${isAcked ? "acked" : ""}">
+    const evidence = ctx.evidence
+      ? `<a class="ack-btn" href="${esc(ctx.evidence)}" target="_blank" rel="noopener">Evidence</a>` : "";
+    return `<div class="alert ${lvl} ${isAcked ? "acked" : ""} ${isClosed ? "closed" : ""}">
       <div class="a-top">
         <span class="lvl ${lvl}">${lvl}</span>
         <span class="a-when">${when}</span>
         <span class="a-zone">${esc(a.cam_name || "")} · ${esc(a.zone || "")}</span>
         ${mode}
+        ${evidence}
         <button class="ack-btn" data-ack="${esc(a.id)}" ${isAcked ? "disabled" : ""}>
           ${isAcked ? "✓ acknowledged" : "Acknowledge"}
         </button>
+        ${isClosed ? `<span class="closed-label">Closed${a.closed_by ? ` · ${esc(a.closed_by)}` : ""}</span>` :
+          `<button class="ack-btn" data-close="${esc(a.id)}" ${isAcked ? "" : "disabled"} title="Acknowledge before closing">Close</button>`}
       </div>
       <div class="a-msg">${esc(a.message || "")}</div>
     </div>`;
@@ -2041,6 +2167,25 @@ function renderAlerts() {
       } catch (err) {
         btn.disabled = false;
         btn.textContent = "ack failed — retry";
+      }
+    };
+  });
+  feed.querySelectorAll(".ack-btn[data-close]").forEach((btn) => {
+    btn.onclick = async (event) => {
+      event.stopPropagation();
+      const id = btn.dataset.close;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/alerts/${encodeURIComponent(id)}/close`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ by: "operator" }),
+        });
+        if (!res.ok) throw new Error(`close failed (${res.status})`);
+        state.alertsKey = "";
+        await refreshAlerts();
+      } catch {
+        btn.disabled = false;
+        btn.textContent = "close failed — retry";
       }
     };
   });
