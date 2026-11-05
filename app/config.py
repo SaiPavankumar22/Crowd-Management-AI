@@ -12,7 +12,13 @@ def _dir(env_var: str, default: str) -> str:
 DATA_DIR = _dir("CROWD_DATA_DIR", os.path.join(BASE_DIR, "data"))
 UPLOADS_DIR = _dir("CROWD_UPLOADS_DIR", os.path.join(BASE_DIR, "uploads"))
 SAMPLES_DIR = _dir("CROWD_SAMPLES_DIR", os.path.join(BASE_DIR, "samples"))
+EVIDENCE_DIR = _dir("CROWD_EVIDENCE_DIR", os.path.join(DATA_DIR, "evidence"))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+# MongoDB Atlas is an optional remote archive. SQLite and media files remain
+# the local source of truth, so the app stays operational when Atlas is down.
+MONGODB_URL = os.environ.get("MONGODB_URL", "").strip()
+MONGODB_DB_NAME = os.environ.get("MONGODB_DB_NAME", "godavari").strip() or "godavari"
 
 
 def resolve_media(path: str) -> str:

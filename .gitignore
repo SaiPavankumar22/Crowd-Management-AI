@@ -1,5 +1,6 @@
 *.pt
 .venv/
+.env
 .data/
 .tmp/
 _*.png

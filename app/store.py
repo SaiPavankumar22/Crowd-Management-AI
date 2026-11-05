@@ -47,7 +47,9 @@ def _db() -> sqlite3.Connection:
             action TEXT NOT NULL, target TEXT, detail TEXT)""")
         alert_columns = {row[1] for row in _conn.execute("PRAGMA table_info(alerts)")}
         for name, definition in (("zone_id", "TEXT"), ("ack_by", "TEXT"),
-                                 ("ack_ts", "REAL"), ("context", "TEXT")):
+                                 ("ack_ts", "REAL"), ("context", "TEXT"),
+                                 ("status", "TEXT NOT NULL DEFAULT 'open'"),
+                                 ("closed_by", "TEXT"), ("closed_ts", "REAL")):
             if name not in alert_columns:
                 _conn.execute(f"ALTER TABLE alerts ADD COLUMN {name} {definition}")
         _conn.commit()
@@ -66,6 +68,9 @@ def add_alert(alert: dict):
              alert.get("zone_id"), json.dumps(alert.get("context") or {})),
         )
         conn.commit()
+    from .mongo_sync import mirror
+    mirror.replace("alerts", {**alert, "status": alert.get("status", "open"),
+                                "_id": alert["id"]})
 
 
 def recent_alerts(limit: int = 100) -> list[dict]:
@@ -74,7 +79,8 @@ def recent_alerts(limit: int = 100) -> list[dict]:
         conn = _db()
         rows = conn.execute(
             "SELECT id, cam_id, cam_name, zone, level, message, ts, zone_id, "
-            "context, ack_by FROM alerts ORDER BY ts DESC LIMIT ?", (limit,)
+            "context, ack_by, ack_ts, status, closed_by, closed_ts "
+            "FROM alerts ORDER BY ts DESC LIMIT ?", (limit,)
         ).fetchall()
     out = []
     for r in rows:
@@ -84,7 +90,9 @@ def recent_alerts(limit: int = 100) -> list[dict]:
             context = {}
         out.append({"id": r[0], "cam_id": r[1], "cam_name": r[2], "zone": r[3],
                     "level": r[4], "message": r[5], "ts": r[6],
-                    "zone_id": r[7], "context": context, "ack_by": r[9]})
+                    "zone_id": r[7], "context": context, "ack_by": r[9],
+                    "ack_ts": r[10], "status": r[11], "closed_by": r[12],
+                    "closed_ts": r[13]})
     return out
 
 
@@ -94,6 +102,62 @@ def ack_alert(alert_id: str, by: str) -> None:
         conn.execute("UPDATE alerts SET ack_by=?, ack_ts=? WHERE id=?",
                      (by, __import__("time").time(), alert_id))
         conn.commit()
+    _mirror_alert(alert_id)
+
+
+def close_alert(alert_id: str, by: str) -> bool:
+    import time
+    with _lock:
+        conn = _db()
+        cursor = conn.execute(
+            "UPDATE alerts SET status='closed',closed_by=?,closed_ts=? WHERE id=? AND status!='closed'",
+            (by, time.time(), alert_id))
+        conn.commit()
+        changed = cursor.rowcount > 0
+    if changed:
+        _mirror_alert(alert_id)
+    return changed
+
+
+def _mirror_alert(alert_id: str) -> None:
+    import json
+    with _lock:
+        row = _db().execute(
+            "SELECT id,cam_id,cam_name,zone,level,message,ts,zone_id,context,ack_by,"
+            "ack_ts,status,closed_by,closed_ts FROM alerts WHERE id=?", (alert_id,)
+        ).fetchone()
+    if row:
+        try:
+            context = json.loads(row[8] or "{}")
+        except Exception:
+            context = {}
+        from .mongo_sync import mirror
+        mirror.replace("alerts", {"_id": row[0], "id": row[0], "cam_id": row[1],
+                                   "cam_name": row[2], "zone": row[3], "level": row[4],
+                                   "message": row[5], "ts": row[6], "zone_id": row[7],
+                                   "context": context, "ack_by": row[9], "ack_ts": row[10],
+                                   "status": row[11], "closed_by": row[12],
+                                   "closed_ts": row[13]})
+
+
+def close_recovered_zone_alerts(cam_id: str, zone_id: str) -> int:
+    """Auto-resolve active capacity alerts after zone occupancy recovers."""
+    import time
+    with _lock:
+        conn = _db()
+        alert_ids = [row[0] for row in conn.execute(
+            "SELECT id FROM alerts WHERE cam_id=? AND zone_id=? AND status='open' "
+            "AND level IN ('WARNING','OVERCROWDED')", (cam_id, zone_id)).fetchall()]
+        cursor = conn.execute(
+            "UPDATE alerts SET status='closed',closed_by='system:recovery',closed_ts=? "
+            "WHERE cam_id=? AND zone_id=? AND status='open' "
+            "AND level IN ('WARNING','OVERCROWDED')",
+            (time.time(), cam_id, zone_id))
+        conn.commit()
+        changed = cursor.rowcount
+    for alert_id in alert_ids[:changed]:
+        _mirror_alert(alert_id)
+    return changed
 
 
 # --------------------------------------------------------------------- outbox
@@ -186,11 +250,17 @@ def add_audit(action: str, actor: str = "system", target: str | None = None,
     import time
     with _lock:
         conn = _db()
-        conn.execute("INSERT INTO audit_log (ts,actor,action,target,detail) "
+        cursor = conn.execute("INSERT INTO audit_log (ts,actor,action,target,detail) "
                      "VALUES (?,?,?,?,?)",
                      (time.time(), actor, action, target,
                       json.dumps(detail or {})))
         conn.commit()
+        audit_id = cursor.lastrowid
+        ts = conn.execute("SELECT ts FROM audit_log WHERE id=?", (audit_id,)).fetchone()[0]
+    from .mongo_sync import mirror
+    mirror.replace("audit_events", {"_id": audit_id, "ts": ts, "actor": actor,
+                                    "action": action, "target": target,
+                                    "detail": detail or {}})
 
 
 def recent_audit(limit: int = 100) -> list[dict]:
@@ -213,6 +283,12 @@ def add_sample(cam_id: str, ts: float, count: int, occupancy, zones: list,
         # Retain 90 days; samples are intentionally coarse (one per 15 seconds).
         conn.execute("DELETE FROM samples WHERE ts < ?", (ts - 90 * 86400,))
         conn.commit()
+    from .mongo_sync import mirror
+    sample_id = f"{cam_id}:{ts:.6f}"
+    mirror.replace("samples", {"_id": sample_id, "cam_id": cam_id, "ts": ts,
+                                "count": count, "occupancy": occupancy,
+                                "zones": zones, "lines": lines or [],
+                                "transitions": transitions or []})
 
 
 def history(since: float, cam_id: str | None = None) -> list[dict]:
@@ -233,6 +309,9 @@ def add_heatmap(cam_id: str, ts: float, grid: dict):
         conn.execute("INSERT OR REPLACE INTO heatmaps VALUES (?,?,?)", (cam_id, ts, json.dumps(grid)))
         conn.execute("DELETE FROM heatmaps WHERE ts < ?", (ts - 90 * 86400,))
         conn.commit()
+    from .mongo_sync import mirror
+    mirror.replace("heatmaps", {"_id": f"{cam_id}:{ts:.6f}", "cam_id": cam_id,
+                                "ts": ts, "grid": grid})
 
 
 def heatmap_history(since: float, cam_id: str, limit: int = 500) -> list[dict]:
