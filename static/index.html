@@ -12,91 +12,150 @@
 <div class="ambient"></div>
 <div class="grain"></div>
 
-<!-- ============================ TOP BAR ============================ -->
-<header class="topbar">
-  <div class="brand">
-    <div class="mark" aria-hidden="true">
-      <svg viewBox="0 0 32 32" fill="none">
-        <path d="M16 3l11 6.4v13.2L16 29 5 22.6V9.4L16 3z" stroke="url(#g1)" stroke-width="1.4"/>
-        <path d="M16 9.5l5.6 3.2v6.6L16 22.5l-5.6-3.2v-6.6L16 9.5z" stroke="url(#g1)" stroke-width="1.1" opacity=".65"/>
-        <circle cx="16" cy="16" r="2.1" fill="#22d3ee"/>
-        <defs><linearGradient id="g1" x1="5" y1="3" x2="27" y2="29">
-          <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#818cf8"/>
-        </linearGradient></defs>
-      </svg>
-    </div>
-    <div class="brand-text">
-      <h1>GODAVARI</h1>
-      <span>Crowd Intelligence Platform</span>
-    </div>
-  </div>
+<div class="app" id="app">
 
-  <div class="topbar-mid">
-    <div class="live-pill" id="live-pill"><i></i><span>LIVE</span></div>
-    <div class="clock" id="clock">--:--:--</div>
-  </div>
-
-  <div class="topmeta" id="topmeta"></div>
-</header>
-
-<!-- ============================= SHELL ============================= -->
-<main class="shell">
-  <!-- ---------------------------- LEFT ---------------------------- -->
-  <aside class="rail rail-left">
-    <section class="card">
-      <div class="card-head">
-        <h2>Camera sources</h2>
-        <button id="btn-add" class="btn ghost sm" title="Add a camera">+ Add</button>
+  <!-- ============================ SIDEBAR ============================ -->
+  <aside class="sidebar" id="sidebar" aria-label="Sources and settings">
+    <div class="side-head">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <path d="M16 3l11 6.4v13.2L16 29 5 22.6V9.4L16 3z" stroke="url(#g1)" stroke-width="1.4"/>
+            <path d="M16 9.5l5.6 3.2v6.6L16 22.5l-5.6-3.2v-6.6L16 9.5z" stroke="url(#g1)" stroke-width="1.1" opacity=".65"/>
+            <circle cx="16" cy="16" r="2.1" fill="#22d3ee"/>
+            <defs><linearGradient id="g1" x1="5" y1="3" x2="27" y2="29">
+              <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#818cf8"/>
+            </linearGradient></defs>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>GODAVARI</h1>
+          <span>Crowd intelligence</span>
+        </div>
       </div>
-      <div id="cam-list" class="cam-list"></div>
-    </section>
+      <button id="btn-side-toggle" class="side-toggle" title="Collapse sidebar"
+              aria-label="Collapse sidebar" aria-expanded="true">«</button>
+    </div>
 
-    <section class="card hidden" id="add-dialog">
-      <div class="card-head"><h2>New source</h2><button class="x" id="btn-add-close">✕</button></div>
-      <label class="fld">Name <input id="cam-name" placeholder="Ghat 1 — main approach"/></label>
-      <div class="tabs">
-        <button class="tab on" data-mode="upload">Upload</button>
-        <button class="tab" data-mode="sample">Sample</button>
-        <button class="tab" data-mode="source">RTSP</button>
-      </div>
-      <div id="pane-upload" class="pane">
-        <label class="drop" id="drop">
-          <input type="file" id="file-input" accept="video/*"/>
-          <span class="drop-ico">⇪</span>
-          <b>Choose crowd footage</b>
-          <small>mp4 · avi · mov · mkv &nbsp;—&nbsp; or drop a file</small>
-          <em id="file-label"></em>
+    <nav class="side-nav" role="tablist" aria-label="Sections">
+      <button class="side-tab on" data-panel="cameras" role="tab" aria-selected="true">
+        <span class="ico" aria-hidden="true">▣</span><span class="lbl">Cameras</span>
+      </button>
+      <button class="side-tab" data-panel="engine" role="tab" aria-selected="false">
+        <span class="ico" aria-hidden="true">⚙</span><span class="lbl">Engine</span>
+      </button>
+      <button class="side-tab" data-panel="insights" role="tab" aria-selected="false">
+        <span class="ico" aria-hidden="true">◔</span><span class="lbl">Insights</span>
+      </button>
+    </nav>
+
+    <div class="side-body">
+      <!-- ---------------------------- CAMERAS ---------------------------- -->
+      <section id="panel-cameras" class="side-panel on">
+        <div class="panel-title">
+          <h2>Camera sources</h2>
+          <button id="btn-add" class="btn ghost sm" title="Add a camera">+ Add</button>
+        </div>
+        <div id="cam-list" class="cam-list"></div>
+
+        <section class="subcard hidden" id="add-dialog">
+          <div class="subcard-head"><h3>New source</h3><button class="x" id="btn-add-close">✕</button></div>
+          <label class="fld">Name <input id="cam-name" placeholder="Ghat 1 — main approach"/></label>
+          <div class="tabs">
+            <button class="tab on" data-mode="upload">Upload</button>
+            <button class="tab" data-mode="sample">Sample</button>
+            <button class="tab" data-mode="source">RTSP</button>
+          </div>
+          <div id="pane-upload" class="pane">
+            <label class="drop" id="drop">
+              <input type="file" id="file-input" accept="video/*"/>
+              <span class="drop-ico">⇪</span>
+              <b>Choose crowd footage</b>
+              <small>mp4 · avi · mov · mkv &nbsp;—&nbsp; or drop a file</small>
+              <em id="file-label"></em>
+            </label>
+            <label class="chk"><input type="checkbox" id="loop-input" checked/> Loop playback</label>
+          </div>
+          <div id="pane-sample" class="pane hidden">
+            <select id="sample-select"></select>
+          </div>
+          <div id="pane-source" class="pane hidden">
+            <input id="source-input" placeholder="rtsp://user:pass@ip:554/stream  ·  or  0"/>
+          </div>
+          <div class="row-end">
+            <span id="add-progress" class="muted sm"></span>
+            <button id="btn-start" class="btn primary">Start monitoring</button>
+          </div>
+        </section>
+      </section>
+
+      <!-- ----------------------------- ENGINE ---------------------------- -->
+      <section id="panel-engine" class="side-panel">
+        <div class="panel-title">
+          <h2>Engine</h2>
+          <span class="pill" id="engine-state">…</span>
+        </div>
+        <dl class="kv" id="sys-kv"></dl>
+        <label class="fld detector-profile-label">Detection profile
+          <select id="detector-profile" aria-label="Detection profile">
+            <option value="balanced">Balanced · faster</option>
+            <option value="dense">Dense crowd · more detail</option>
+            <option value="custom">Configured defaults</option>
+          </select>
         </label>
-        <label class="chk"><input type="checkbox" id="loop-input" checked/> Loop playback</label>
-      </div>
-      <div id="pane-sample" class="pane hidden">
-        <select id="sample-select"></select>
-      </div>
-      <div id="pane-source" class="pane hidden">
-        <input id="source-input" placeholder="rtsp://user:pass@ip:554/stream  ·  or  0"/>
-      </div>
-      <div class="row-end">
-        <span id="add-progress" class="muted sm"></span>
-        <button id="btn-start" class="btn primary">Start monitoring</button>
-      </div>
-    </section>
+        <p class="muted sm detector-profile-note" id="detector-profile-note">Dense mode uses a larger image and lower confidence threshold. It can improve small-person recall, with slower inference and more false detections.</p>
+      </section>
 
-    <section class="card sys">
-      <div class="card-head"><h2>Engine</h2><span class="pill" id="engine-state">…</span></div>
-      <dl class="kv" id="sys-kv"></dl>
-      <label class="fld detector-profile-label">Detection profile
-        <select id="detector-profile" aria-label="Detection profile">
-          <option value="balanced">Balanced · faster</option>
-          <option value="dense">Dense crowd · more detail</option>
-          <option value="custom">Configured defaults</option>
-        </select>
-      </label>
-      <p class="muted sm detector-profile-note" id="detector-profile-note">Dense mode uses a larger image and lower confidence threshold. It can improve small-person recall, with slower inference and more false detections.</p>
-    </section>
+      <!-- ---------------------------- INSIGHTS --------------------------- -->
+      <section id="panel-insights" class="side-panel">
+        <div class="panel-title">
+          <h2>Event intelligence</h2>
+          <span class="pill" id="analytics-window">24h</span>
+        </div>
+        <div class="toolgroup tight">
+          <select id="analytics-period" aria-label="Analytics event window">
+            <option value="6">6 hours</option><option value="24" selected>24 hours</option>
+            <option value="72">3 days</option><option value="168">7 days</option>
+          </select>
+          <button id="btn-analytics" class="btn ghost sm">Refresh</button>
+        </div>
+        <div id="analytics-summary" class="analytics-grid"><div class="empty-zone">Collecting samples for forecasts and event comparisons…</div></div>
+        <p class="muted sm note">Forecasts use recent linear trends. Queue time and bottleneck signals are estimates; confirm against live camera conditions and on-site staff.</p>
+
+        <div class="toolgroup tight reports">
+          <a class="btn ghost sm" href="/api/reports/daily.pdf">Daily PDF</a>
+          <a class="btn ghost sm" href="/api/reports/event.pdf?hours=6">Event PDF · 6h</a>
+        </div>
+
+        <div class="panel-title spaced">
+          <h2>Heatmap timeline</h2>
+          <button id="btn-heatmap-play" class="btn ghost sm">Play</button>
+        </div>
+        <select id="heatmap-camera" aria-label="Camera for heatmap timeline"></select>
+        <canvas id="heatmap-history" aria-label="Historical crowd heatmap"></canvas>
+        <div class="archive-controls">
+          <input id="heatmap-range" type="range" min="0" max="0" value="0" disabled/>
+          <span id="heatmap-time" class="muted sm">No archived heatmaps yet</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="side-foot">
+      <button id="btn-side-toggle-2" class="side-collapse" title="Collapse sidebar">« Collapse sidebar</button>
+    </div>
   </aside>
 
-  <!-- --------------------------- CENTER --------------------------- -->
-  <section class="rail rail-mid">
+  <!-- =========================== WORKSPACE =========================== -->
+  <main class="workspace">
+
+    <header class="topbar">
+      <div class="topbar-mid">
+        <div class="live-pill" id="live-pill"><i></i><span>LIVE</span></div>
+        <div class="clock" id="clock">--:--:--</div>
+      </div>
+      <div class="topmeta" id="topmeta"></div>
+    </header>
+
     <div class="card stage-card">
       <div class="stage-head">
         <div class="cam-id">
@@ -107,33 +166,51 @@
           </div>
         </div>
         <div class="stage-tools">
+          <button id="btn-areas" class="btn ghost sm" title="Set up areas and gate lines">Areas &amp; gates</button>
           <div class="seg" id="view-seg">
             <button data-view="live" class="on">Live</button>
             <button data-view="wall">Wall</button>
           </div>
-          <button id="btn-fullscreen" class="btn ghost sm" title="Fullscreen control room">Fullscreen</button>
+          <button id="btn-fullscreen" class="btn ghost sm" title="Fullscreen wall">Fullscreen</button>
         </div>
       </div>
 
-      <div class="operator-toolbar">
-        <div class="preset-row" role="group" aria-label="Operator overlay presets">
-          <button class="preset-btn on" data-preset="safety" title="Safety overlay preset · 1"><span>Safety</span><small>Capacity</small></button>
-          <button class="preset-btn" data-preset="flow" title="Flow overlay preset · 2"><span>Flow</span><small>Direction</small></button>
-          <button class="preset-btn" data-preset="density" title="Density overlay preset · 3"><span>Density</span><small>Hotspots</small></button>
-          <button class="preset-btn" data-preset="access" title="Access overlay preset · 4"><span>Access</span><small>Gates</small></button>
-          <button class="preset-btn" data-preset="clean" title="Minimal overlay preset · 5"><span>Clean</span><small>Video</small></button>
+      <div class="view-row">
+        <div class="cam-views" id="cam-views" role="tablist" aria-label="Camera view">
+          <button class="camview" data-camview="all" role="tab" aria-selected="false"
+                  title="All views at once (0)"><span class="cv-ico">⧉</span>All views</button>
+          <button class="camview on" data-camview="boxes" role="tab" aria-selected="true"
+                  title="Detection boxes over the live feed (1)"><span class="cv-ico">▣</span>Boxes</button>
+          <button class="camview" data-camview="actual" role="tab" aria-selected="false"
+                  title="Clean feed, no overlay (2)"><span class="cv-ico">▢</span>Actual</button>
+          <button class="camview" data-camview="heatmap" role="tab" aria-selected="false"
+                  title="Density heatmap (3)"><span class="cv-ico">◍</span>Heatmap</button>
+          <button class="camview" data-camview="areas" role="tab" aria-selected="false"
+                  title="Areas isolated and colour-coded (4)"><span class="cv-ico">⬡</span>Areas</button>
+          <button class="camview" data-camview="flow" role="tab" aria-selected="false"
+                  title="Movement direction per area (5)"><span class="cv-ico">↗</span>Flow</button>
         </div>
-        <details class="overlay-options">
-          <summary>Layers & display</summary>
-          <div class="overlay-popover">
-            <button class="tgl" data-ov="heatmap">Heatmap</button>
-            <button class="tgl on" data-ov="zones">Zones</button>
-            <button class="tgl" data-ov="flow">Flow arrows</button>
-            <button class="tgl on" data-ov="countLines">Entry / exit lines</button>
-            <button class="tgl on" data-ov="detections">Detection boxes</button>
-            <label class="opacity-control">Heatmap opacity <input id="heat-opacity" type="range" min="10" max="90" value="58"/><output id="heat-opacity-value">58%</output></label>
-          </div>
-        </details>
+        <label class="heat-op hidden" id="heat-op-wrap">Heatmap opacity
+          <input id="heat-opacity" type="range" min="10" max="90" value="58"/>
+          <output id="heat-opacity-value">58%</output>
+        </label>
+      </div>
+
+      <div id="draw-banner" class="draw-banner hidden">
+        <span class="db-ico" aria-hidden="true">✎</span>
+        <span class="db-text" id="draw-banner-text">Click the corners of the area on the video.</span>
+        <span class="db-fields" id="area-fields">
+          <input id="zone-name" placeholder="Area name" size="12" aria-label="Area name"/>
+          <label class="db-cap">capacity <input id="zone-cap" type="number" min="1" value="20"/></label>
+        </span>
+        <span class="db-fields hidden" id="gate-fields">
+          <input id="gate-name" placeholder="Gate name" size="12" aria-label="Gate name"/>
+        </span>
+        <span class="db-actions">
+          <button id="btn-undo-pt" class="btn ghost sm">Undo point</button>
+          <button id="btn-finish" class="btn primary sm">Save area</button>
+          <button id="btn-cancel-draw" class="btn ghost sm">Cancel</button>
+        </span>
       </div>
 
       <div class="stage" id="stage">
@@ -145,6 +222,7 @@
             <b id="hud-count">0</b>
             <span>people in frame</span>
           </div>
+          <div class="trust" id="hud-trust" hidden></div>
         </div>
         <div class="hud hud-tr">
           <span class="lvl" id="hud-level">IDLE</span>
@@ -157,12 +235,32 @@
         <div class="stage-empty" id="stage-empty">
           <div class="se-icon">◉</div>
           <h3>Waiting for a source</h3>
-          <p>Add a camera on the left — upload crowd footage, use the bundled sample, or point at an RTSP stream.</p>
-        </div>
-        <div id="draw-hint" class="draw-hint hidden">
-          Click on the frame to place polygon points · <b>Finish</b> closes the loop · <b>Esc</b> cancels
+          <p>Add a camera in the sidebar — upload crowd footage, use a bundled sample, or point at an RTSP stream.</p>
         </div>
         <div class="flush" id="flush"></div>
+      </div>
+
+      <img id="feed-raw" class="feed-raw" alt=""/>
+
+      <div class="mosaic hidden" id="mosaic">
+        <div class="mosaic-head" id="mosaic-head">All views</div>
+        <div class="mosaic-grid" id="mosaic-grid">
+          <div class="mtile" data-mview="boxes" role="button" tabindex="0" title="Open the boxes view">
+            <canvas></canvas><span class="mtag">▣ Boxes</span>
+          </div>
+          <div class="mtile" data-mview="actual" role="button" tabindex="0" title="Open the clean view">
+            <canvas></canvas><span class="mtag">▢ Actual</span>
+          </div>
+          <div class="mtile" data-mview="heatmap" role="button" tabindex="0" title="Open the heatmap view">
+            <canvas></canvas><span class="mtag">◍ Heatmap</span>
+          </div>
+          <div class="mtile" data-mview="areas" role="button" tabindex="0" title="Open the area view">
+            <canvas></canvas><span class="mtag">⬡ Areas</span>
+          </div>
+          <div class="mtile" data-mview="flow" role="button" tabindex="0" title="Open the flow view">
+            <canvas></canvas><span class="mtag">↗ Flow</span>
+          </div>
+        </div>
       </div>
 
       <div class="wall-wrap hidden" id="wall-wrap">
@@ -170,18 +268,8 @@
       </div>
 
       <div class="stage-foot">
-        <div class="toolgroup">
-          <label class="switch"><input type="checkbox" id="chk-draw"/><span></span>Draw zone</label>
-          <button id="btn-grid" class="btn ghost sm">Auto-grid</button>
-          <button id="btn-count-line" class="btn ghost sm" title="Configure a virtual entry/exit line">Count line</button>
-          <button id="btn-clear-zones" class="btn ghost sm">Clear zones</button>
-          <button id="btn-del-cam" class="btn ghost sm danger">Remove source</button>
-        </div>
-        <div id="new-zone-form" class="newzone hidden">
-          <input id="zone-name" placeholder="Zone name" size="12"/>
-          <input id="zone-cap" type="number" min="1" value="20" title="capacity (people)"/>
-          <button id="btn-finish" class="btn primary sm">Finish zone</button>
-        </div>
+        <span class="foot-hint" id="foot-hint">Areas and gate lines are saved per camera and survive a restart.</span>
+        <button id="btn-edit-areas" class="btn ghost sm">Edit areas</button>
       </div>
     </div>
 
@@ -197,51 +285,83 @@
       </div>
       <canvas id="trend"></canvas>
     </div>
+  </main>
 
-    <section class="card analytics-card">
-      <div class="card-head">
-        <h2>Event intelligence</h2>
-        <div class="toolgroup"><select id="analytics-period" aria-label="Analytics event window">
-          <option value="6">6 hours</option><option value="24" selected>24 hours</option>
-          <option value="72">3 days</option><option value="168">7 days</option></select>
-          <span class="pill" id="analytics-window">24h</span>
-          <a class="btn ghost sm" href="/api/reports/daily.pdf">Daily PDF</a>
-          <a class="btn ghost sm" href="/api/reports/event.pdf?hours=6">Event PDF · 6h</a>
-          <button id="btn-analytics" class="btn ghost sm">Refresh</button></div>
+  <!-- =========================== INSPECTOR =========================== -->
+  <aside class="inspector" id="inspector" aria-label="Alerts, areas and trust">
+    <div class="ins-tabs" role="tablist" aria-label="Inspector sections">
+      <button class="ins-tab on" data-ins="alerts" role="tab" aria-selected="true">
+        Alerts <span class="badge" id="alert-badge">0</span>
+      </button>
+      <button class="ins-tab" data-ins="areas" role="tab" aria-selected="false">Areas &amp; gates</button>
+      <button class="ins-tab" data-ins="trust" role="tab" aria-selected="false">Trust</button>
+    </div>
+
+    <!-- ----------------------------- ALERTS ---------------------------- -->
+    <section class="ins-panel on" id="insp-alerts">
+      <div class="card alerts-card">
+        <div class="card-head">
+          <h2>Alert stream</h2>
+          <label class="chk"><input type="checkbox" id="chk-sound" checked/> sound</label>
+        </div>
+        <div id="alert-feed" class="alert-feed"></div>
+        <p class="muted sm note">Warnings appear at 75% of an area's capacity; the capacity alert fires when an area stays over 100% for 5 seconds.</p>
       </div>
-      <div id="analytics-summary" class="analytics-grid"><div class="empty-zone">Collecting samples for forecasts and event comparisons…</div></div>
-      <p class="muted sm">Forecasts use recent linear trends. Queue time and bottleneck signals are estimates; confirm against live camera conditions and on-site staff.</p>
     </section>
 
-    <section class="card archive-card">
-      <div class="card-head"><h2>Heatmap timeline</h2><div class="toolgroup">
-        <select id="heatmap-camera" aria-label="Camera for heatmap timeline"></select>
-        <button id="btn-heatmap-play" class="btn ghost sm">Play</button></div></div>
-      <canvas id="heatmap-history" aria-label="Historical crowd heatmap"></canvas>
-      <div class="archive-controls"><input id="heatmap-range" type="range" min="0" max="0" value="0" disabled/>
-        <span id="heatmap-time" class="muted sm">No archived heatmaps yet</span></div>
-    </section>
-  </section>
-
-  <!-- ---------------------------- RIGHT --------------------------- -->
-  <aside class="rail rail-right">
-    <section class="card">
-      <div class="card-head">
-        <h2>Zone telemetry</h2>
-        <span class="pill" id="zone-count">0</span>
+    <!-- ----------------------------- AREAS ----------------------------- -->
+    <section class="ins-panel" id="insp-areas">
+      <div class="card">
+        <div class="card-head">
+          <h2>Areas</h2>
+          <span class="pill" id="zone-count">0</span>
+        </div>
+        <ul class="steps" id="area-steps">
+          <li><b>1</b> Press <em>New area</em>.</li>
+          <li><b>2</b> Click each corner on the video.</li>
+          <li><b>3</b> Name it, set capacity, press <em>Save area</em>.</li>
+        </ul>
+        <div class="area-actions">
+          <button id="btn-new-area" class="btn primary sm">＋ New area</button>
+          <button id="btn-grid" class="btn ghost sm" title="Split the frame into equal areas">Auto-grid</button>
+          <button id="btn-clear-zones" class="btn ghost sm danger">Clear all</button>
+        </div>
+        <div id="zone-list" class="zone-list"></div>
       </div>
-      <div id="zone-list" class="zone-list"></div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Gate lines</h2>
+          <span class="pill" id="gate-count">0</span>
+        </div>
+        <p class="muted sm note">A gate line counts people crossing an entrance or exit, in each direction.</p>
+        <div class="area-actions">
+          <button id="btn-count-line" class="btn ghost sm">＋ Add gate line</button>
+        </div>
+        <div id="gate-list" class="gate-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>This source</h2></div>
+        <button id="btn-del-cam" class="btn ghost sm danger">Remove this source</button>
+      </div>
     </section>
 
-    <section class="card alerts-card">
-      <div class="card-head">
-        <h2>Alert stream</h2>
-        <label class="chk"><input type="checkbox" id="chk-sound" checked/> sound</label>
+    <!-- ----------------------------- TRUST ----------------------------- -->
+    <section class="ins-panel" id="insp-trust">
+      <div class="card health-card">
+        <div class="card-head">
+          <h2>Analytics trust</h2>
+          <span class="pill" id="health-state">…</span>
+        </div>
+        <div id="analytics-health" class="health-list">
+          <div class="empty-zone">Waiting for the first inference…</div>
+        </div>
+        <p class="muted sm note">A camera can stream perfectly while detection has failed. Unmeasured isn’t empty: those states are marked degraded, never shown as a safe zero.</p>
       </div>
-      <div id="alert-feed" class="alert-feed"></div>
     </section>
   </aside>
-</main>
+</div>
 
 <div class="toasts" id="toasts"></div>
 <script src="/static/app.js"></script>

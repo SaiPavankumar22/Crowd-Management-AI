@@ -8,11 +8,11 @@ them across frames, counts them inside the zones you draw, turns those counts in
 occupancy and density, and raises an alert before a zone stops being safe — on a dashboard
 built to be watched in a control room.
 
-![Live dashboard: two sources, per-zone levels, alert stream, trend](docs/dashboard.png)
+![Live dashboard: collapsible sidebar, five camera views, areas and gate lines, KPIs](docs/dashboard.png)
 
 [Quick start](#quick-start) · [Docker](#run-it-in-docker) · [Deployment](docs/DEPLOYMENT.md) ·
 [Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Improvement plan](docs/improvement.md) ·
-[Test footage](docs/FOOTAGE.md)
+[Test footage](docs/FOOTAGE.md) · [Results report (PDF)](docs/RESULTS_REPORT.pdf)
 
 ---
 
@@ -148,19 +148,71 @@ and lets overlays stay full-resolution regardless of stream quality.
 
 ## The dashboard
 
-| Panel | What it shows |
+The console has three columns: a **collapsible sidebar** (sources, engine, insights), one
+**workspace** centred on the live video, and an **inspector** with three tabs — *Alerts*,
+*Areas & gates* and *Trust*. The sidebar remembers its state, and choosing a section while
+collapsed expands it; secondary things (detection profile, analytics, reports, heatmap
+timeline) live there instead of competing with the camera.
+
+| Area | What it shows |
 |---|---|
-| **Sources** | Every camera with live count and worst zone level; add/remove; per-source status (`LIVE`, `RECONNECTING`, stopped) |
-| **Stage** | Annotated feed, HUD with smoothed people-in-frame, FPS and source, per-zone chips (`count/capacity · occupancy % · level`) |
-| **Heatmap** | 48×27 decaying density grid built from foot points — shows *where* the crowd compresses, not just how many |
-| **Flow** | Per-zone average track velocity as a direction arrow with speed; eased over ~1 s so it does not blink |
-| **Zone rail** | Ring gauge, level pill, editable capacity, flow readout and sparkline per zone |
-| **KPIs** | People across all sources, tracked identities, inference rate, zones at risk — each with a sparkline |
+| **Sidebar · Cameras** | Every camera with live count, trust tag and worst-area level; add upload / sample / RTSP sources; remove a source |
+| **Sidebar · Engine** | Model, device, CUDA, queue depth, frame age, dropped frames, alert outbox, and the detection profile switch |
+| **Sidebar · Insights** | Event intelligence (forecasts, growth, queues, area movement), report downloads, archived heatmap timeline |
+| **Stage** | The camera in the selected view, HUD with smoothed people-in-frame, trust badge, FPS and source |
+| **KPIs** | People across all sources, tracked identities, inference rate, areas at risk — each with a sparkline |
 | **Trend** | Occupancy history with alert markers, so you can see the run-up to a breach |
-| **Alert stream** | Live alerts plus persisted history, CSV export, audio chime on capacity breach |
+| **Inspector · Alerts** | Live alerts plus persisted history and the acknowledge action, with an unacknowledged counter on the tab |
+| **Inspector · Areas & gates** | Steps to draw an area, the per-area ring gauge / level / capacity / flow / sparkline, and gate-line entry-exit counts |
+| **Inspector · Trust** | Per-camera analytics health: measured, degraded or stale, and why |
 | **Wall view** | All cameras as tiles with count and level, for a control-room display |
 
-Keyboard: `H` heatmap · `Z` zones · `F` flow · `Esc` cancel zone drawing.
+Areas are called *areas* in the interface; the HTTP API and the database still say `zones`
+(`/api/cameras/{id}/zones`, `metrics.zones`), so scripts written against the old names keep
+working.
+
+### Camera views
+
+One camera can be inspected five ways, without losing the measurement — the HUD count and
+trust badge stay visible in every view:
+
+| View | What you see |
+|---|---|
+| **All views** | The five views below as tiles of the same camera at once — click a tile to open it full size |
+| **Boxes** (default) | Live feed with detection boxes, area outlines and gate lines |
+| **Actual** | The clean picture, no boxes and no overlays |
+| **Heatmap** | Density heatmap over the scene with area boundaries and an opacity slider |
+| **Areas** | The scene dimmed so each area stands out, tinted by level with `name · count/capacity · %` |
+| **Flow** | Movement direction and speed per area |
+
+Detection boxes are burnt into the stream by the worker, so choosing a box-free view also
+tells that camera's worker to stop drawing them; the choice follows the camera you select.
+Everything else is drawn on the overlay canvas and costs the worker nothing.
+
+The **All views** mosaic needs the boxed and the clean picture at the same time, so the stream
+cache keeps the last pre-annotation frame and serves it at `?raw=1` (encoded lazily, with a
+one-frame cache — a camera nobody watches this way pays nothing). Both images are the same
+instant of the same camera, and switching cameras inside the mosaic follows immediately.
+
+Keyboard: `0` all views · `1`–`5` switch camera view · `Enter` save the area you are drawing ·
+`Esc` cancel drawing.
+
+### Drawing areas and gate lines
+
+1. Open the **Areas & gates** tab (or press **Edit areas** under the video).
+2. Press **New area**. A banner appears above the video and the cursor becomes a crosshair.
+3. Click each corner of the area. **Undo point** removes the last one.
+4. Give it a name and a capacity, then press **Save area** (or `Enter`).
+
+Areas are stored per camera with a version number in `data/cameras.json`, so the boundary is
+the same after a restart, and every alert records which version it fired under. **Auto-grid**
+splits the frame into equal areas in one step. A **gate line** is two clicks: it then counts
+people crossing it in each direction (`↑` entries, `↓` exits), and both areas and gate lines
+can be removed from their rows in the same tab.
+
+Clicks are mapped to the video frame itself: the stage adopts the source's real aspect ratio,
+so a 2.15:1 camera is not letterboxed inside a 16:9 box and a corner you click is the corner
+the detector measures.
 
 ---
 
@@ -209,6 +261,72 @@ density model next to the detector rather than trusting counts alone.
 
 ---
 
+## Production architecture (implemented)
+
+The plan in [docs/improvement.md](docs/improvement.md) is no longer only a plan. The
+pieces below exist in the code, are covered by tests (`tests/test_architecture.py`) and
+run on the GPU deployment.
+
+| Capability | Where | What it actually does |
+|---|---|---|
+| **Detector adapter boundary** | `app/adapters.py` | Every backend returns one `DetectionResult`; the pipeline never touches Ultralytics objects. `UltralyticsDetector` also serves Ultralytics-exported `.onnx` weights. |
+| **Licence-aware model registry** | `app/detector.py`, `GET /api/models` | Name, backend, version, **licence**, expected VRAM, warm state per model. Hot swap loads and warms the replacement first, keeps the old model on failure, and writes an audit entry. |
+| **Tiled inference** | `app/tiling.py` | 3×3 overlapping tiles with cross-tile NMS, gated on *median box height* so compute is only spent where people are small. Measured on the packed-gate clip: **6.8 → 31.0 (2×2) → 61.8 (3×3) people**, 7.3 → 20.6 → 26.5 ms. |
+| **Mode router** | `app/router.py` | `sparse`/`moderate` → detector count is operational; `dense`/`unknown` → `ANALYTICS_DEGRADED`, `selected_count: null`, density shown separately as advisory. Hysteresis on recovery, immediate on loss of trust. |
+| **Density companion** | `app/adapters.py` | `DensityEstimator` interface + TorchScript (DM-Count-style) adapter. Default is an explicit `density-unavailable` state — never an invented number. Advisory until a per-camera validation gate is signed off. |
+| **Durable alert outbox** | `app/outbox.py`, `app/store.py` | Alerts are persisted before delivery, retried with exponential backoff + jitter, dead-lettered, deduplicated on the alert id, and can be acknowledged/escalated. Survives restarts. |
+| **Fair scheduler** | `app/scheduler.py` | One pending request per camera (drop-oldest), round-robin dispatch, micro-batching, and a **frame-age budget** (`CROWD_MAX_FRAME_AGE_MS`) that drops stale frames instead of analysing them. No inline inference on camera threads. |
+| **Analytics health** | `app/analytics.py` | Dead-man switch per camera: no inference, count collapse on a healthy stream, and count drift against the previous window all become `degraded` rather than a comfortable zero. |
+| **Geometry versioning & audit** | `app/pipeline.py`, `app/store.py` | Zone edits bump `zones_version`; calibration is versioned and attributed. Every alert records the zone version, calibration version, model version and estimation mode it fired under. |
+| **Throughput** | `app/pipeline.py` | People-per-minute in/out per virtual line — the number that predicts a surge, not just instantaneous head-count. |
+
+### When the detector cannot see the crowd
+
+A 768×432 clip of a few hundred people yields **0.3 detections** at the default
+settings, because each person is ~12×25 px. Nothing in that result says the
+detector failed — an empty road returns the same thing — so the dashboard used
+to show a trusted "1". `app/detail.py` fixes this without inventing numbers:
+
+| pass | people found | cost |
+|---|---|---|
+| full frame @ 640 (default) | 0.3 | 10 ms |
+| 2×2 probe @ 640 (triggered only when the default found ≤ 6) | 4.4 | 15 ms |
+| 3×3 detail @ 1280 (only if the probe disagrees) | **135.4** | 58 ms |
+
+Two cheaper triggers were measured and rejected: edge density scored 0.42–0.89
+on *every* sample clip (it measures texture, not people), and frame-to-frame
+motion was ~0.000 on the packed clips (standing crowds in near-static shots).
+Escalation is therefore detection-against-detection and needs no per-site
+calibration. Mode is sticky per camera, so a packed scene cannot alternate
+between a trusted "7" and a lower bound of 146 on consecutive frames.
+
+What the operator sees is a floor, not a count: the HUD reads `≥ 135`, the badge
+says `DETECTOR · LOWER BOUND — full frame 6 → detail 135 · undercount likely`,
+and capacity alerts are suppressed in favour of one advisory per cooldown
+("Dense crowd: 135 people detected is a lower bound, not a count … manual
+observation required"). A 3×3 pass on a dense camera costs about half its frame
+rate (≈8 → 4 FPS per camera), which is why it is gated so hard.
+
+```bash
+curl -s localhost:8000/metrics | grep detail_
+curl -s localhost:8000/api/cameras | jq '.[] | {name, tier: .metrics.tier,
+  count: .metrics.count, primary: .metrics.primary_count, mode: .metrics.mode}'
+```
+
+```bash
+curl -s localhost:8000/api/models | jq '.models[] | {name, license, status}'
+curl -s localhost:8000/api/analytics/health | jq '.cameras'
+curl -s -X POST localhost:8000/api/alerts/<id>/ack -d '{"by":"shift-supervisor"}'
+curl -s localhost:8000/api/audit | jq
+```
+
+Benchmark any model/tiling combination on the same clips:
+
+```bash
+python tools/bench_models.py --clips samples/a.mp4 samples/b.mp4 \
+    --models yolo26n.pt --tiling off,2x2,3x3 --frames 30
+```
+
 ## Configuration
 
 Every setting is an environment variable; nothing needs editing in code.
@@ -228,6 +346,18 @@ Every setting is an environment variable; nothing needs editing in code.
 | `CROWD_DECODER` | `auto` | Decoder backend: auto, opencv, ffmpeg, gstreamer or nvdec |
 | `CROWD_BATCH_SIZE` | `1` | Maximum inference micro-batch size |
 | `CROWD_MAX_BATCH_WAIT_MS` | `8` | Maximum scheduler wait before dispatching a batch |
+| `CROWD_MAX_FRAME_AGE_MS` | `500` | Frames older than this are dropped, not analysed |
+| `CROWD_DETAIL_PASS` | `1` | Two-tier detail escalation for tiny people |
+| `CROWD_DETAIL_PROBE_BELOW` | `6` | Probe when the full-frame pass finds this few |
+| `CROWD_DETAIL_IMGSZ` / `CROWD_DETAIL_GRID` | `1280` / `3` | High-resolution detail pass |
+| `CROWD_DETAIL_EXIT_BELOW` / `_EXIT_FRAMES` | `3` / `10` | Hysteresis before leaving detail mode |
+| `CROWD_TILING` | `auto` | Gated tiled inference: `auto` or `off` |
+| `CROWD_TILE_ROWS` / `CROWD_TILE_COLS` | `3` / `3` | Tile grid when tiling engages |
+| `CROWD_TILE_MIN_BOX_HEIGHT_PX` | `40` | Tile only when median person height is below this |
+| `CROWD_MODE_ROUTER` | `1` | Enable the sparse/dense/degraded estimation router |
+| `CROWD_DENSE_BOX_HEIGHT_PX` | `32` | Small-box threshold that marks a scene dense |
+| `CROWD_DENSITY_MODEL` | empty | TorchScript density checkpoint (advisory only) |
+| `CROWD_DENSITY_VALIDATED` | `0` | Set only after a signed per-camera validation gate |
 | `CROWD_FRAME_QUEUE_SIZE` | `2` | Bounded inference queue size |
 | `CROWD_LOOP` | `1` | Loop file sources |
 | `CROWD_WARN_PCT` | `75` | Zone warning level (% of capacity) |
@@ -256,8 +386,10 @@ NOC dashboard can drive it.
 | `GET` | `/api/cameras/{id}` | One camera |
 | `GET` | `/api/cameras/{id}/diagnostics` | Camera health, decoder and timing diagnostics |
 | `DELETE` | `/api/cameras/{id}` | Stop and remove |
-| `PUT` | `/api/cameras/{id}/zones` | Replace zones: `{"zones":[{name, polygon, capacity, warn_pct}]}` |
-| `GET` | `/api/cameras/{id}/stream` | Annotated MJPEG stream |
+| `PUT` | `/api/cameras/{id}/zones` | Replace areas: `{"zones":[{name, polygon, capacity, warn_pct}]}` (bumps `zones_version`) |
+| `PUT` | `/api/cameras/{id}/count-lines` | Replace gate lines: `{"lines":[{name, a, b, entry_side}]}` |
+| `PUT` | `/api/cameras/{id}/display` | Bake detection boxes into the stream or not: `{"detections": true}` |
+| `GET` | `/api/cameras/{id}/stream` | Annotated MJPEG stream; add `?raw=1` for the same frames without boxes |
 | `GET` | `/api/cameras/{id}/snapshot` | Single annotated JPEG |
 | `GET` | `/api/samples` | Available sample clips (subfolder clips as `dir/name`) |
 | `GET` | `/api/alerts?limit=100` | Persisted alert history |
@@ -265,8 +397,14 @@ NOC dashboard can drive it.
 | `GET` | `/api/system` | Model, device, torch/CUDA, uptime, counters |
 | `GET` | `/api/health` | Service and camera health summary |
 | `GET` | `/metrics` | Prometheus-compatible process metrics |
-| `GET` | `/api/models` | Available and active models |
-| `PUT` | `/api/models` | Switch between configured models |
+| `GET` | `/api/models` | Model registry: licence, backend, version, warm state |
+| `GET` | `/api/models/{name}/status` | One model's load/warm state |
+| `PUT` | `/api/models` | Hot-swap a model (warm first, audit-logged) |
+| `POST` | `/api/alerts/{id}/ack` | Acknowledge an alert (`{"by": "..."}`) |
+| `POST` | `/api/alerts/{id}/escalate` | Escalate an unacknowledged alert |
+| `GET` | `/api/outbox` | Durable delivery queue state |
+| `GET` | `/api/audit` | Model, zone and calibration change trail |
+| `GET` | `/api/analytics/health` | Per-camera analytics dead-man / drift state |
 | `PUT` | `/api/cameras/{id}/calibration` | Save ground-plane calibration points |
 | `WS` | `/ws` | Full snapshot (cameras + alerts + system) at `CROWD_WS_PERIOD` |
 
@@ -371,7 +509,7 @@ app/
   config.py      Env-var configuration
 static/          Dashboard (index.html, app.js, style.css)
 tools/           Install, start, headless UI check, footage fetcher
-docs/            Architecture, deployment, footage, screenshots
+docs/            Architecture, deployment, footage, screenshots, results report
 Dockerfile, docker-compose.yml, docker-compose.gpu.yml
 ```
 

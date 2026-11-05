@@ -304,3 +304,35 @@ noted; YouTube items are marked evaluation-only and must not be redistributed).
 - VelocityNet — density-aware velocity anomaly for crowds — https://arxiv.org/html/2510.18187v1
 - Zero-shot SAM crowd counting (segmentation limits in dense crowds) — https://arxiv.org/html/2402.17514v2
 - Crowd disaster density thresholds — https://www.sciencedirect.com/science/article/pii/S2212420924004151
+
+---
+
+## 8. Appendix — what this codebase does today (November 2026)
+
+The target architecture above is the scale path. This is the current, verified state of the
+single-VM implementation, so the gap between the two is explicit.
+
+| Area | Today | Target (§3) |
+|---|---|---|
+| Decode | one `cv2.VideoCapture` thread per camera | MediaMTX fan-in + NVDEC drop-frame |
+| Inference | one model behind a lock, bounded queue, micro-batching, stale-frame shedding | Triton dynamic batching, priority levels |
+| Resolution | adaptive detail pass: 2×2 probe then 3×3 @1280 when the full-frame pass sees ≤6 people | density model as second opinion |
+| Counting | detector + tracker; recovered counts published as a **lower bound**, never as a fact | physical ppl/m² from homography |
+| State | in-process registry, SQLite history, audit table | TimescaleDB/Redpanda |
+| Transport | WebSocket snapshots + MJPEG per camera (annotated and raw) | SSE fan-out, server-side mosaic |
+| Dashboard | one camera, five views and an all-views mosaic, inspector for alerts/areas/trust | multi-operator wall |
+
+**Measured on the Nebius VM (RTX-class GPU, 4 sample cameras):** 4.0–5.2 inference FPS per
+camera with the detail pass active on dense sources, ~60–85 ms p95 frame age, zero dropped or
+stale frames, 30 tests green.
+
+**Detail pass, measured on a 768×432 clip of a few hundred people:** full frame @640 finds
+**0.3** people; a 2×2 probe @640 finds **4.4**; 3×3 @1280 finds **135.4** in 58 ms. Two cheaper
+triggers were measured and rejected — edge density scored 0.42–0.89 on *every* clip, and
+frame-to-frame motion was ~0.000 on standing crowds — so escalation is detection-against-detection
+and needs no per-site calibration. What the operator sees is a floor (`≥ 135`), not a count.
+
+**Dashboard views (all per camera, switchable, `1`–`5`, mosaic on `0`):** boxes, actual (clean
+frame), heatmap, areas (isolated and colour-coded), flow. The mosaic needs the boxed and clean
+pictures at once, which is why the worker keeps the pre-annotation frame and serves it at
+`?raw=1` with a one-frame lazy encode.
