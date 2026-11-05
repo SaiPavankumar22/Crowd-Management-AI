@@ -46,6 +46,7 @@ class RouterTests(unittest.TestCase):
         for _ in range(3):
             out = self.router.route(make_detection(30, box_height=18))
         self.assertEqual(out.mode, DENSE)
+
         self.assertIsNone(out.selected_count)
         self.assertEqual(out.estimation_mode, "degraded_review")
         self.assertTrue(out.review_required)
@@ -106,6 +107,28 @@ class RouterTests(unittest.TestCase):
         # while the detector is failing.
         out = self.router.route(make_detection(40, box_height=15))
         self.assertEqual(out.mode, DENSE)
+
+
+class PerCameraProfileTests(unittest.TestCase):
+    def test_scheduler_batches_are_grouped_by_camera_profile(self):
+        from app.detector import ModelManager
+
+        class FakeAdapter:
+            def __init__(self):
+                self.profiles = []
+            def set_profile(self, conf=None, imgsz=None):
+                self.profiles.append((conf, imgsz))
+            def detect_batch(self, frames, *, camera_ids=None):
+                return list(zip(camera_ids, [self.profiles[-1]] * len(frames)))
+
+        manager = ModelManager("stub", [], 0.30, 640)
+        manager.model = FakeAdapter()
+        manager.set_camera_profile("dense-cam", "dense")
+        result = manager.detect_batch([object(), object()], camera_ids=["dense-cam", "plain-cam"])
+        self.assertEqual(result[0][0], "dense-cam")
+        self.assertEqual(result[0][1], (0.15, 1280))
+        self.assertEqual(result[1][0], "plain-cam")
+        self.assertEqual(result[1][1], (0.30, 640))
 
 
 class TilingTests(unittest.TestCase):
@@ -188,6 +211,32 @@ class OutboxTests(unittest.TestCase):
     def _outbox(self, transport):
         from app.outbox import AlertOutbox
         return AlertOutbox(transport=transport, max_attempts=3, poll_s=0.05)
+
+    def test_alert_can_be_closed_and_keeps_operator_attribution(self):
+        import app.store as store
+        alert = {"id": "close-me", "cam_id": "c1", "cam_name": "Gate",
+                 "zone": "North", "level": "WARNING", "message": "busy",
+                 "ts": time.time()}
+        store.add_alert(alert)
+        self.assertTrue(store.close_alert("close-me", "shift-lead"))
+        self.assertFalse(store.close_alert("close-me", "shift-lead"))
+        row = next(a for a in store.recent_alerts() if a["id"] == "close-me")
+        self.assertEqual(row["status"], "closed")
+        self.assertEqual(row["closed_by"], "shift-lead")
+        self.assertIsNotNone(row["closed_ts"])
+
+    def test_zone_recovery_auto_closes_only_active_capacity_alerts(self):
+        import app.store as store
+        base = {"cam_id": "c1", "cam_name": "Gate", "zone": "North",
+                "zone_id": "z1", "message": "busy", "ts": time.time()}
+        for alert_id, level in (("warning", "WARNING"), ("capacity", "OVERCROWDED"),
+                                ("other", "INFO")):
+            store.add_alert({**base, "id": alert_id, "level": level})
+        self.assertEqual(store.close_recovered_zone_alerts("c1", "z1"), 2)
+        rows = {a["id"]: a for a in store.recent_alerts()}
+        self.assertEqual(rows["warning"]["status"], "closed")
+        self.assertEqual(rows["warning"]["closed_by"], "system:recovery")
+        self.assertEqual(rows["other"]["status"], "open")
 
     def test_failed_delivery_is_retried_then_dead_lettered(self):
         class Broken:
