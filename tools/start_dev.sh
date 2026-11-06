@@ -31,4 +31,7 @@ export TMP="$ROOT\\.tmp"
 mkdir -p "$CROWD_DATA_DIR" "$CROWD_UPLOADS_DIR" "$CROWD_SAMPLES_DIR" \
          "$YOLO_CONFIG_DIR" "$TORCH_HOME" "$MPLCONFIGDIR" "$ROOT/.tmp"
 
+if [ -x "$VENV/bin/python" ]; then
+  exec "$VENV/bin/python" run.py
+fi
 exec "$VENV/Scripts/python.exe" run.py

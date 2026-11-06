@@ -1,5 +1,6 @@
 """Zones: a named polygon region of a camera with a capacity."""
 import uuid
+import math
 
 LEVEL_COLORS = {
     "OK": "#22c55e",
@@ -91,10 +92,13 @@ def validate_polygon(polygon) -> list:
 def clean_zone_dict(d: dict, warn_pct_default: float = 75.0) -> dict:
     if not isinstance(d, dict) or not d.get("name"):
         raise ValueError("zone needs a name")
+    warn_pct = float(d.get("warn_pct", warn_pct_default))
+    if not math.isfinite(warn_pct) or not 0 < warn_pct <= 100:
+        raise ValueError("warn_pct must be finite and between 0 and 100")
     return {
         "id": d.get("id") or uuid.uuid4().hex[:8],
         "name": str(d["name"])[:60],
         "polygon": validate_polygon(d.get("polygon")),
         "capacity": max(1, int(d.get("capacity", 100))),
-        "warn_pct": float(d.get("warn_pct", warn_pct_default)),
+        "warn_pct": warn_pct,
     }

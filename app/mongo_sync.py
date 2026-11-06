@@ -8,21 +8,21 @@ files remain on the local volume.
 from __future__ import annotations
 
 import logging
-import queue
-import re
 import threading
 import time
 from typing import Any
 
 from . import config
+from .privacy import redact_source_credentials
+from . import store
 
 log = logging.getLogger(__name__)
 
 
 class MongoMirror:
     def __init__(self):
-        self._queue: queue.Queue[tuple[str, str, dict[str, Any] | str]] = queue.Queue(maxsize=5000)
         self._lock = threading.Lock()
+        self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._state = "disabled" if not config.MONGODB_URL else "connecting"
         self._error: str | None = None
@@ -37,21 +37,17 @@ class MongoMirror:
                 return
             self._thread = threading.Thread(target=self._run, name="mongo-mirror", daemon=True)
             self._thread.start()
-        try:
-            self._queue.put_nowait(("ping", "", {}))
-        except queue.Full:
-            pass
+        # Persist a startup ping so status reflects an actual Atlas handshake
+        # even when no application data has changed since the previous boot.
+        store.mongo_enqueue("ping", "", {})
+        self._wake.set()
 
     def _enqueue(self, op: str, collection: str, value: dict[str, Any] | str) -> None:
         if not config.MONGODB_URL:
             return
         self.start()
-        try:
-            self._queue.put_nowait((op, collection, value))
-        except queue.Full:
-            with self._lock:
-                self._dropped += 1
-                self._error = "archive queue full; local SQLite copy retained"
+        store.mongo_enqueue(op, collection, redact_source_credentials(value))
+        self._wake.set()
 
     def replace(self, collection: str, document: dict[str, Any]) -> None:
         if "_id" not in document:
@@ -62,67 +58,69 @@ class MongoMirror:
         self._enqueue("delete", collection, key)
 
     def _run(self) -> None:
-        from pymongo import MongoClient
-
         client = None
         database = None
+        try:
+            from pymongo import MongoClient
+        except Exception as exc:
+            with self._lock:
+                self._state = "error"
+                self._error = type(exc).__name__
+            return
         while True:
-            op, collection, value = self._queue.get()
+            rows = store.mongo_due(time.time(), limit=1)
+            if not rows:
+                self._wake.wait(1.0)
+                self._wake.clear()
+                continue
+            row = rows[0]
+            op, collection, value = row["op"], row["collection"], row["value"]
             try:
-                for attempt in range(3):
-                    try:
-                        if client is None:
-                            client = MongoClient(
-                                config.MONGODB_URL,
-                                serverSelectionTimeoutMS=3000,
-                                connectTimeoutMS=3000,
-                                socketTimeoutMS=5000,
-                                appname="GodavariCrowdMonitor",
-                            )
-                            database = client[config.MONGODB_DB_NAME]
-                            client.admin.command("ping")
-                        if op == "ping":
-                            pass
-                        elif op == "replace":
-                            collection_obj = database[collection]
-                            collection_obj.replace_one({"_id": value["_id"]}, value,
-                                                       upsert=True)
-                        else:
-                            collection_obj = database[collection]
-                            collection_obj.delete_one({"_id": value})
-                        with self._lock:
-                            self._state = "connected"
-                            self._error = None
-                            self._last_success = time.time()
-                        break
-                    except Exception as exc:  # Mongo is optional; SQLite remains authoritative.
-                        if client is not None:
-                            try:
-                                client.close()
-                            except Exception:
-                                pass
-                        client = database = None
-                        with self._lock:
-                            self._state = "error"
-                            self._error = type(exc).__name__
-                        if attempt < 2:
-                            time.sleep(0.5 * (attempt + 1))
+                if client is None:
+                    client = MongoClient(
+                        config.MONGODB_URL, serverSelectionTimeoutMS=3000,
+                        connectTimeoutMS=3000, socketTimeoutMS=5000,
+                        appname="GodavariCrowdMonitor")
+                    database = client[config.MONGODB_DB_NAME]
+                    client.admin.command("ping")
+                if op == "ping":
+                    pass
+                elif op == "replace":
+                    database[collection].replace_one({"_id": value["_id"]}, value, upsert=True)
                 else:
-                    log.warning("Mongo archive write failed (%s); SQLite copy retained",
-                                self._error or "unknown error")
-            finally:
-                self._queue.task_done()
+                    database[collection].delete_one({"_id": value})
+                store.mongo_complete(row["id"])
+                with self._lock:
+                    self._state, self._error = "connected", None
+                    self._last_success = time.time()
+            except Exception as exc:  # local SQLite remains authoritative and retryable.
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                client = database = None
+                delay = min(3600, 2 ** min(row["attempts"], 12))
+                store.mongo_retry(row["id"], row["attempts"] + 1,
+                                  type(exc).__name__, time.time() + delay)
+                with self._lock:
+                    self._state, self._error = "error", type(exc).__name__
+                log.warning("Mongo archive write failed (%s); durable SQLite retry queued",
+                            type(exc).__name__)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            state, error, last_success = self._state, self._error, self._last_success
+        pending = store.mongo_pending()
+        with self._lock:
             return {
                 "configured": bool(config.MONGODB_URL),
-                "state": self._state,
+                "state": state,
                 "database": config.MONGODB_DB_NAME if config.MONGODB_URL else None,
-                "pending": self._queue.qsize(),
-                "dropped": self._dropped,
-                "last_success_ts": self._last_success,
-                "last_error": self._error,
+                "pending": pending,
+                "dropped": 0,
+                "last_success_ts": last_success,
+                "last_error": error,
             }
 
 
@@ -138,8 +136,7 @@ def camera_document(camera: dict[str, Any]) -> dict[str, Any] | None:
            if key in {"name", "source_type", "zones", "zones_version", "count_lines",
                       "display", "profile", "created", "calibration", "calibration_version",
                       "warn_pct", "capacity"}}
-    if isinstance(doc.get("name"), str):
-        doc["name"] = re.sub(r"(?i)(rtsps?://)[^/@]+@", r"\1[redacted]@", doc["name"])
+    doc = redact_source_credentials(doc)
     doc.update({"_id": camera_id, "id": camera_id,
                 "source_config_stored_locally": True})
     return doc

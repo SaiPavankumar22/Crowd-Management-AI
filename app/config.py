@@ -19,6 +19,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 # the local source of truth, so the app stays operational when Atlas is down.
 MONGODB_URL = os.environ.get("MONGODB_URL", "").strip()
 MONGODB_DB_NAME = os.environ.get("MONGODB_DB_NAME", "godavari").strip() or "godavari"
+MAX_UPLOAD_BYTES = max(1, int(os.environ.get("CROWD_MAX_UPLOAD_BYTES", str(1024 ** 3))))
 
 
 def resolve_media(path: str) -> str:

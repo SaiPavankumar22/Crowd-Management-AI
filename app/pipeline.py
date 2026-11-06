@@ -130,13 +130,18 @@ class CameraWorker(threading.Thread):
             self.metrics = {"status": "error", "detail": f"model load failed: {self.model.load_error}"}
             return
 
+        is_live = self.cam["source_type"] in ("rtsp", "webcam")
         cap = self._open_capture()
+        while cap is None and is_live and not self._stop_event.is_set():
+            self.metrics = {"status": "reconnecting", "detail": "waiting for live source"}
+            if self._stop_event.wait(2):
+                return
+            cap = self._open_capture()
         if cap is None:
             self.metrics = {"status": "error",
-                            "detail": f"could not open source: {self.cam.get('path')!r}"}
+                            "detail": "could not open source"}
             return
 
-        is_live = self.cam["source_type"] in ("rtsp", "webcam")
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         if not is_live:
             fps = min(max(fps, 1.0), 60.0)
@@ -158,21 +163,21 @@ class CameraWorker(threading.Thread):
                     with self._data_lock:
                         self.metrics["status"] = "ended"
                     break
-                # live stream hiccup -> try to reconnect for ~12s
+                # Keep retrying live sources until explicitly stopped.
                 cap.release()
                 recovered = None
-                for _ in range(6):
-                    if self._stop_event.is_set():
+                with self._data_lock:
+                    self.metrics = {"status": "reconnecting", "detail": "live source disconnected"}
+                self.engine.reset()
+                while recovered is None and not self._stop_event.is_set():
+                    if self._stop_event.wait(2):
                         break
-                    time.sleep(2)
                     recovered = self._open_capture()
-                    if recovered is not None:
-                        break
                 if recovered is None:
-                    with self._data_lock:
-                        self.metrics = {"status": "error", "detail": "stream lost"}
                     break
                 cap = recovered
+                with self._data_lock:
+                    self.metrics = {"status": "running", "detail": None}
                 continue
 
             self.frame_health.frame_received(frame)
@@ -403,13 +408,14 @@ class CameraWorker(threading.Thread):
             # A lower-bound count cannot justify a capacity breach: in degraded
             # modes the number is incomplete by construction, so the alert is
             # replaced by one advisory (see below) instead of a false breach.
-            alerts = self.engine.update(zone)
-            recovered = (zone.occupancy_pct < zone.warn_pct * 0.8
-                         and zone.raw_count < zone.capacity * 0.9)
-            if recovered:
-                self.registry.close_recovered_alerts(self.cam["id"], zone.id)
             if degraded_count:
                 alerts = []
+            else:
+                alerts = self.engine.update(zone)
+                recovered = (zone.occupancy_pct < zone.warn_pct * 0.8
+                             and zone.raw_count < zone.capacity * 0.9)
+                if recovered:
+                    self.registry.close_recovered_alerts(self.cam["id"], zone.id)
             for alert in alerts:
                 # Every alert carries the geometry/calibration/model versions it
                 # fired under, so an after-event audit can reconstruct it.
@@ -554,7 +560,7 @@ class CameraWorker(threading.Thread):
         else:
             message += ". Manual observation required."
         alert = {
-            "id": uuid.uuid4().hex[:10],
+            "id": uuid.uuid4().hex,
             "cam_id": self.cam["id"],
             "cam_name": self.cam.get("name"),
             "zone": zones[0].name if zones else "Camera",

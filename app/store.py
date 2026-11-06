@@ -42,6 +42,16 @@ def _db() -> sqlite3.Connection:
             acked_by TEXT, acked_ts REAL, escalated INTEGER NOT NULL DEFAULT 0)""")
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_due "
                       "ON alert_outbox(state, next_attempt_ts)")
+        _conn.execute("""CREATE TABLE IF NOT EXISTS mongo_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL,
+            collection_name TEXT NOT NULL, document_key TEXT NOT NULL DEFAULT '', value TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0, created_ts REAL NOT NULL,
+            next_attempt_ts REAL NOT NULL, last_error TEXT)""")
+        mongo_columns = {row[1] for row in _conn.execute("PRAGMA table_info(mongo_outbox)")}
+        if "document_key" not in mongo_columns:
+            _conn.execute("ALTER TABLE mongo_outbox ADD COLUMN document_key TEXT NOT NULL DEFAULT ''")
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_mongo_outbox_due "
+                      "ON mongo_outbox(collection_name,document_key,id,next_attempt_ts)")
         _conn.execute("""CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT,
             action TEXT NOT NULL, target TEXT, detail TEXT)""")
@@ -54,6 +64,67 @@ def _db() -> sqlite3.Connection:
                 _conn.execute(f"ALTER TABLE alerts ADD COLUMN {name} {definition}")
         _conn.commit()
     return _conn
+
+
+def mongo_enqueue(op: str, collection: str, value) -> None:
+    """Persist an idempotent Atlas mirror operation for eventual retry."""
+    import json, time
+    with _lock:
+        conn = _db()
+        doc_key = str(value.get("_id", "")) if isinstance(value, dict) else str(value)
+        conn.execute("INSERT INTO mongo_outbox(op,collection_name,document_key,value,created_ts,next_attempt_ts) "
+                     "VALUES(?,?,?,?,?,?)", (op, collection, doc_key, json.dumps(value), time.time(), time.time()))
+        conn.commit()
+
+
+def mongo_due(now: float, limit: int = 20) -> list[dict]:
+    import json
+    with _lock:
+        rows = _db().execute("SELECT q.id,q.op,q.collection_name,q.value,q.attempts FROM mongo_outbox q "
+                             "WHERE q.next_attempt_ts<=? AND NOT EXISTS (SELECT 1 FROM mongo_outbox prior "
+                             "WHERE prior.collection_name=q.collection_name AND prior.document_key=q.document_key "
+                             "AND prior.id<q.id) ORDER BY q.next_attempt_ts,q.id LIMIT ?",
+                             (now, max(1, limit))).fetchall()
+    return [{"id": r[0], "op": r[1], "collection": r[2], "value": json.loads(r[3]),
+             "attempts": r[4]} for r in rows]
+
+
+def mongo_complete(row_id: int) -> None:
+    with _lock:
+        conn = _db()
+        conn.execute("DELETE FROM mongo_outbox WHERE id=?", (row_id,))
+        conn.commit()
+
+
+def mongo_retry(row_id: int, attempts: int, error: str, next_attempt_ts: float) -> None:
+    with _lock:
+        conn = _db()
+        conn.execute("UPDATE mongo_outbox SET attempts=?,last_error=?,next_attempt_ts=? WHERE id=?",
+                     (attempts, error, next_attempt_ts, row_id))
+        conn.commit()
+
+
+def mongo_pending() -> int:
+    with _lock:
+        return int(_db().execute("SELECT COUNT(*) FROM mongo_outbox").fetchone()[0])
+
+
+def get_alert(alert_id: str) -> dict | None:
+    import json
+    with _lock:
+        r = _db().execute("SELECT id,cam_id,cam_name,zone,level,message,ts,zone_id,context,"
+                          "ack_by,ack_ts,status,closed_by,closed_ts FROM alerts WHERE id=?",
+                          (alert_id,)).fetchone()
+    if not r:
+        return None
+    try:
+        context = json.loads(r[8] or "{}")
+    except Exception:
+        context = {}
+    return {"id": r[0], "cam_id": r[1], "cam_name": r[2], "zone": r[3],
+            "level": r[4], "message": r[5], "ts": r[6], "zone_id": r[7],
+            "context": context, "ack_by": r[9], "ack_ts": r[10],
+            "status": r[11], "closed_by": r[12], "closed_ts": r[13]}
 
 
 def add_alert(alert: dict):
@@ -248,6 +319,9 @@ def add_audit(action: str, actor: str = "system", target: str | None = None,
               detail: dict | None = None) -> None:
     import json
     import time
+    from .privacy import redact_source_credentials
+    detail = redact_source_credentials(detail or {})
+    target = redact_source_credentials(target)
     with _lock:
         conn = _db()
         cursor = conn.execute("INSERT INTO audit_log (ts,actor,action,target,detail) "
