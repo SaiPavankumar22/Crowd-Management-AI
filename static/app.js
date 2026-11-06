@@ -141,6 +141,10 @@ function bindUI() {
   };
   $("btn-count-line").onclick = startCountLineDrawing;
   $("btn-calibrate").onclick = startCalibrationDrawing;
+  $("validation-source").onchange = renderValidation;
+  $("btn-validation-sample").onclick = recordValidationSample;
+  $("btn-validation-promote").onclick = promoteValidationSource;
+  $("btn-validation-revoke").onclick = revokeValidationSource;
   $("heatmap-camera").onchange = loadHeatmapHistory;
   $("heatmap-range").oninput = (e) => renderArchivedHeatmap(Number(e.target.value));
   $("btn-heatmap-play").onclick = toggleHeatmapPlayback;
@@ -316,7 +320,8 @@ function paintMosaic() {
 
   const head = $("mosaic-head");
   if (head) {
-    const count = (isLowerBound(m) ? "≥" : "") + (m.count ?? 0);
+    const hl = headlineCount(m);
+    const count = hl.prefix + hl.value;
     const trust = m.estimation_mode ? ` · ${String(m.estimation_mode).replace(/_/g, " ")}` : "";
     const txt = `${cam.name} · ${count} people${trust} · click any tile to open it`;
     if (head.textContent !== txt) head.textContent = txt;
@@ -444,9 +449,12 @@ function restoreLayout() {
     inspector = localStorage.getItem("godavari.inspector") || "alerts";
     view = localStorage.getItem("godavari.camview") || "boxes";
   } catch { /* private mode */ }
-  setSidebar(side !== "closed");
+  // Panels first: switchPanel() expands a collapsed rail on purpose, so calling
+  // it after setSidebar() would throw away the saved collapsed state on every
+  // page load.
   switchPanel(panel);
   switchInspector(inspector);
+  setSidebar(side !== "closed");
   applyCameraView(CAMERA_VIEWS[view] ? view : "boxes", { silent: true });
 }
 
@@ -493,7 +501,11 @@ function beep(severity) {
 /* ------------------------------------------------------------ network --- */
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  // The websocket bypasses HTTP middleware, so when the deployment has auth
+  // enabled the dashboard token has to travel in the query string.
+  const token = new URLSearchParams(location.search).get("token");
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+  ws = new WebSocket(`${proto}://${location.host}/ws${query}`);
   ws.onmessage = (msg) => {
     let data;
     try { data = JSON.parse(msg.data); } catch { return; }
@@ -788,6 +800,7 @@ function renderAll() {
   renderStage();
   renderZones();
   renderGates();
+  renderValidation();
   renderAlerts();
   renderKpis();
   drawTrend();
@@ -813,7 +826,71 @@ function renderTop() {
   $("topmeta").innerHTML = chips.join("");
 }
 
+let MODEL_PICKER_READY = false;
+
+/* Detector family picker. The registry decides what is switchable and what is
+   merely listed: a family whose optional package is missing is shown disabled
+   instead of failing halfway through a load. */
+async function initModelPicker(attempt = 0) {
+  const sel = document.getElementById("model-select");
+  const note = document.getElementById("model-note");
+  if (!sel) return;
+  let data;
+  try {
+    const r = await fetch("/api/models");
+    if (!r.ok) throw new Error(r.statusText);
+    data = await r.json();
+  } catch {
+    if (note) note.textContent = "model registry unavailable";
+    return;
+  }
+  const models = data.models || [];
+  if (!data.active && attempt < 20) {
+    // Cold start: the detector is still warming, so there is no active model
+    // to preselect yet. Try again rather than showing an empty picker.
+    if (note) note.textContent = "waiting for the detector to warm up…";
+    setTimeout(() => initModelPicker(attempt + 1), 3000);
+    return;
+  }
+  sel.innerHTML = models.map((m) => {
+    const missing = m.available === false;
+    const suffix = missing ? ` — needs ${m.requires || "package"}` : "";
+    return `<option value="${esc(m.name)}"${m.name === data.active ? " selected" : ""}${missing ? " disabled" : ""}>${esc(m.name + suffix)}</option>`;
+  }).join("");
+  const active = models.find((m) => m.name === data.active);
+  if (note && active) {
+    note.textContent = `${active.backend} · ${active.license}`
+      + (active.available === false ? " · unavailable" : "")
+      + (active.commercial_use === false ? " · non-commercial licence" : "");
+  }
+  sel.onchange = async () => {
+    const name = sel.value;
+    sel.disabled = true;
+    if (note) note.textContent = `loading ${name}…`;
+    try {
+      const r = await fetch("/api/models", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || r.statusText);
+      }
+      if (note) note.textContent = `active · ${name}`;
+    } catch (err) {
+      if (note) note.textContent = `switch failed: ${err.message}`;
+    } finally {
+      sel.disabled = false;
+    }
+  };
+}
+
 function renderEngine() {
+  if (!MODEL_PICKER_READY) {
+    MODEL_PICKER_READY = true;
+    initModelPicker();
+  }
   const sys = state.sys || {};
   const rows = [
     ["Model", sys.model || "loading…", !sys.load_error],
@@ -849,6 +926,7 @@ function renderCams() {
   }
   ul.innerHTML = state.cameras.map((cam) => {
     const m = cam.metrics || {};
+    const hl = headlineCount(m);
     const sel = cam.id === state.selectedId ? "sel" : "";
     const lvl = m.level || "";
     const health = (m.health && m.health.status) || "unknown";
@@ -856,8 +934,8 @@ function renderCams() {
       <i class="dot ${esc(cam.status)}" title="input: ${esc(health)}"></i>
       <div class="cam-body">
         <div class="name">${esc(cam.name)}</div>
-        <div class="meta"><b>${isLowerBound(m) ? "≥" : ""}${m.count ?? 0}</b> ppl · ${esc(health)}${
-          m.degraded ? ` · <span class="tag-degraded">▲ ${isLowerBound(m) ? "undercount" : "degraded"}</span>` : ""}</div>
+        <div class="meta"><b>${hl.prefix}${hl.value}</b> ppl · ${esc(health)}${
+          m.degraded ? ` · <span class="tag-degraded">▲ ${isLowerBound(m) ? "undercount" : (m.estimation_mode === "dense_consensus" ? "consensus" : "degraded")}</span>` : ""}</div>
         <div class="cam-foot">
           ${lvl ? `<span class="lvl ${lvl}">${lvl}</span>` : ""}
           <canvas class="spark" width="52" height="18"></canvas>
@@ -930,7 +1008,8 @@ function renderStage() {
     feed.removeAttribute("src");
   }
 
-  $("hud-count").textContent = (isLowerBound(m) ? "≥" : "") + (m.count ?? 0);
+  const hl = headlineCount(m);
+  $("hud-count").textContent = hl.prefix + hl.value;
   renderTrust(m, cam);
   const lvlEl = $("hud-level");
   lvlEl.className = "lvl " + (m.level || "IDLE");
@@ -947,11 +1026,26 @@ const TRUST_STATE = {
   detector: { ico: "◎", label: "DETECTOR", tone: "ok" },
   detector_crosscheck: { ico: "◎", label: "DETECTOR · cross-check", tone: "ok" },
   calibrated_density: { ico: "◍", label: "CALIBRATED DENSITY", tone: "warn" },
+  calibrated_head_points: { ico: "•", label: "CALIBRATED HEAD POINTS", tone: "warn" },
   degraded_review: { ico: "▲", label: "ANALYTICS DEGRADED · review", tone: "bad" },
   /* Recovered at higher resolution: a floor, not a count. Marked as the most
      severe trust state because the number only ever understates the crowd. */
   detector_lower_bound: { ico: "≥", label: "DETECTOR · LOWER BOUND", tone: "bad" },
+  /* PET and DM-Count agree: a better number than the detector floor, still an
+     estimate and never a validated count. */
+  dense_consensus: { ico: "≈", label: "MODEL CONSENSUS · ESTIMATE", tone: "warn" },
 };
+
+/* The headline number: consensus estimate when the dense models agree,
+   detector floor when they do not, plain count otherwise. */
+function headlineCount(m) {
+  if (!m) return { prefix: "", value: 0 };
+  if (m.estimation_mode === "dense_consensus" && m.consensus_count != null) {
+    return { prefix: "≈", value: Math.round(m.consensus_count) };
+  }
+  if (isLowerBound(m)) return { prefix: "≥", value: m.count ?? 0 };
+  return { prefix: "", value: m.count ?? 0 };
+}
 
 function isLowerBound(m) {
   return m && m.estimation_mode === "detector_lower_bound";
@@ -963,14 +1057,22 @@ function renderTrust(m, cam) {
   if (!cam || !m.estimation_mode) { el.hidden = true; el.innerHTML = ""; return; }
   const s = TRUST_STATE[m.estimation_mode] || { ico: "◌", label: String(m.estimation_mode).toUpperCase(), tone: "warn" };
   const density = m.density_count == null ? "—" : Math.round(m.density_count);
+  const points = m.head_point_count == null ? "—" : Math.round(m.head_point_count);
   let detail;
-  if (isLowerBound(m)) {
+  if (m.estimation_mode === "dense_consensus") {
+    const spread = m.estimator_spread_pct == null ? "?" : Math.round(m.estimator_spread_pct);
+    detail = `PET ${points} · DM-Count ${density} · agreement ${spread}% · estimate, not a count`;
+  } else if (isLowerBound(m)) {
     const primary = m.primary_count == null ? "?" : m.primary_count;
-    detail = `full frame ${primary} → detail ${m.count ?? 0} · undercount likely`;
+    // Dense cameras are exactly where PET and DM-Count matter, so their
+    // independent estimates stay visible next to the detector floor.
+    const est = (points !== "—" || density !== "—")
+      ? ` · head points ${points} · density ${density}` : "";
+    detail = `full frame ${primary} → detail ${m.count ?? 0}${est} · undercount likely`;
   } else if (m.degraded) {
-    detail = `density ${density} · awaiting operator review`;
+    detail = `head points ${points} · density ${density} · awaiting operator review`;
   } else {
-    detail = `${m.count_source} · density ${density} · ${m.selected_count ?? 0} selected`;
+    detail = `${m.count_source} · head points ${points} · density ${density} · ${m.selected_count ?? 0} selected`;
   }
   el.hidden = false;
   el.className = `trust ${s.tone}`;
@@ -1555,6 +1657,93 @@ function renderGates() {
   });
 }
 
+function renderValidation() {
+  const cam = selectedCam();
+  const source = $("validation-source")?.value || "head_point";
+  const m = (cam && cam.metrics) || {};
+  const policy = (cam && cam.estimation_policy) || {};
+  const stateEl = $("validation-state");
+  const note = $("validation-note");
+  const sampleBtn = $("btn-validation-sample");
+  const promoteBtn = $("btn-validation-promote");
+  const revokeBtn = $("btn-validation-revoke");
+  if (!stateEl || !note || !sampleBtn || !promoteBtn || !revokeBtn) return;
+  const estimate = source === "head_point" ? m.head_point_count : m.density_count;
+  const active = policy.active_source || "none";
+  const samples = policy.samples ?? 0;
+  const mape = policy.mape == null ? "—" : `${(Number(policy.mape) * 100).toFixed(1)}%`;
+  stateEl.textContent = active === source ? "ACTIVE" : policy.approved ? "APPROVED" : "ADVISORY";
+  stateEl.className = "pill " + (active === source ? "ok" : policy.approved ? "warn" : "");
+  note.textContent = cam
+    ? `${source === "head_point" ? "PET head points" : "DM-Count density"}: ${estimate == null ? "no current estimate" : Math.round(estimate)} · ${samples} checks · MAPE ${mape}${policy.expires_at ? ` · valid until ${new Date(policy.expires_at * 1000).toLocaleDateString()}` : ""}`
+    : "Select a camera to record validation checks.";
+  sampleBtn.disabled = !cam || estimate == null;
+  promoteBtn.disabled = !cam || !policy.samples;
+  revokeBtn.disabled = !cam || active === "none";
+}
+
+async function recordValidationSample() {
+  const cam = selectedCam();
+  const source = $("validation-source").value;
+  const manual = Number($("validation-manual").value);
+  const estimate = source === "head_point" ? cam?.metrics?.head_point_count : cam?.metrics?.density_count;
+  if (!cam || !Number.isFinite(manual) || manual < 0 || estimate == null) {
+    alert("Enter a non-negative hand count while the selected estimate is available.");
+    return;
+  }
+  const btn = $("btn-validation-sample");
+  btn.disabled = true;
+  try {
+    const response = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/validation-samples`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, manual_count: manual, model_count: estimate, by: "operator" }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Could not record validation check");
+    cam.estimation_policy = data;
+    $("validation-manual").value = "";
+    toastOk("Validation recorded", `${data.samples} checks · MAPE ${(data.mape * 100).toFixed(1)}%.`);
+  } catch (err) { toastErr("Validation not recorded", err.message); }
+  finally { renderValidation(); }
+}
+
+async function promoteValidationSource() {
+  const cam = selectedCam();
+  if (!cam) return;
+  const source = $("validation-source").value;
+  const btn = $("btn-validation-promote");
+  btn.disabled = true;
+  try {
+    const response = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/estimation-policy`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selected_source: source, by: "operator" }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Could not promote estimate");
+    cam.estimation_policy = data;
+    toastOk("Dense estimate promoted", `${source.replace("_", " ")} is now selected for this camera.`);
+  } catch (err) { toastErr("Promotion blocked", err.message); }
+  finally { renderValidation(); }
+}
+
+async function revokeValidationSource() {
+  const cam = selectedCam();
+  if (!cam) return;
+  const btn = $("btn-validation-revoke");
+  btn.disabled = true;
+  try {
+    const response = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/estimation-policy`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selected_source: "none", by: "operator", reason: "operator review" }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Could not revoke estimate");
+    cam.estimation_policy = data;
+    toastOk("Dense estimate revoked", "The camera has returned to advisory dense estimates.");
+  } catch (err) { toastErr("Revoke failed", err.message); }
+  finally { renderValidation(); }
+}
+
 async function updateZoneCapacity(zoneId, capacity) {
   const cam = selectedCam();
   if (!cam) return;
@@ -1825,7 +2014,8 @@ function renderWall() {
   }
   cams.forEach((c) => {
     const node = wall.querySelector(`[data-count="${c.id}"]`);
-    if (node) node.textContent = (isLowerBound(c.metrics) ? "≥" : "") + (c.metrics ? c.metrics.count ?? 0 : 0);
+    const hl = headlineCount(c.metrics);
+    if (node) node.textContent = hl.prefix + hl.value;
     const tile = wall.querySelector(`.tile[data-id="${c.id}"]`);
     if (tile) {
       const lvl = c.metrics ? c.metrics.level : "IDLE";

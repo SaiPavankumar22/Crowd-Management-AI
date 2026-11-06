@@ -112,6 +112,33 @@ class CameraManagementTests(unittest.TestCase):
         self.assertNotIn("path", document)
         self.assertNotIn("secret", json.dumps(document))
 
+    def test_dense_estimate_promotion_requires_and_uses_camera_validation(self):
+        class _Estimator:
+            validated = True
+
+        registry = object.__new__(CameraRegistry)
+        registry._lock = threading.Lock()
+        registry.points = _Estimator()
+        registry.density = _Estimator()
+        registry.save = lambda: None
+        registry.cameras = {
+            "cam-1": {
+                "id": "cam-1", "name": "Gate", "calibration": {"version": 2},
+                "estimation_policy": {"selected_source": "none", "samples": [],
+                                      "validation": {"approved": False}},
+            }
+        }
+        with patch.object(config, "VALIDATION_MIN_SAMPLES", 2), \
+                patch.object(config, "VALIDATION_MAX_MAPE", 0.20), \
+                patch.object(store, "add_audit"):
+            registry.add_validation_sample("cam-1", "head_point", 100, 105, "lead")
+            registry.add_validation_sample("cam-1", "head_point", 80, 76, "lead")
+            summary = registry.promote_estimation_source("cam-1", "head_point", "lead")
+
+        self.assertTrue(summary["approved"])
+        self.assertEqual(summary["active_source"], "head_point")
+        self.assertEqual(registry.calibrated_count_source("cam-1"), "head_point")
+
 
 if __name__ == "__main__":
     unittest.main()

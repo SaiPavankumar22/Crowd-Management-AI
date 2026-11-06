@@ -52,6 +52,47 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(out.review_required)
         self.assertEqual(out.detector_count, 30)
 
+    def test_validated_head_points_can_be_selected_in_dense_mode(self):
+        from app.adapters import PointResult
+
+        points = PointResult(np.array([[10, 10], [20, 20]], np.float32),
+                             2, 31.0, {}, "validated", 12.0,
+                             "pet", "1")
+        out = self.router.route(make_detection(30, box_height=18), points=points,
+                                calibrated_count_source="head_point")
+        self.assertEqual(out.mode, DENSE)
+        self.assertEqual(out.selected_count, 31)
+        self.assertEqual(out.count_source, "head_points_validated")
+        self.assertEqual(out.head_point_count, 31.0)
+        self.assertFalse(out.review_required)
+
+
+class DenseAdapterTests(unittest.TestCase):
+    # The remaining router regression cases below intentionally exercise the
+    # same safety contract alongside the adapter helpers.
+    def setUp(self):
+        self.router = ModeRouter(RouterConfig(hysteresis_frames=3))
+
+    def test_point_zone_counts_use_original_frame_coordinates(self):
+        from app.adapters import _point_zone_counts
+
+        counts = _point_zone_counts(
+            np.array([[20, 20], [80, 80], [150, 20]], np.float32),
+            [{"id": "left", "polygon": [[0, 0], [.5, 0], [.5, 1], [0, 1]]},
+             {"id": "right", "polygon": [[.5, 0], [1, 0], [1, 1], [.5, 1]]}],
+            (100, 200))
+        self.assertEqual(counts, {"left": 2, "right": 1})
+
+    def test_density_zone_counts_integrate_cells_without_resize_scaling(self):
+        from app.adapters import _density_zone_counts
+
+        density = np.ones((10, 10), np.float32)
+        counts = _density_zone_counts(
+            density,
+            [{"id": "top", "polygon": [[0, 0], [1, 0], [1, .5], [0, .5]]}])
+        self.assertGreater(counts["top"], 40)
+        self.assertLessEqual(counts["top"], 60)
+
     def test_detector_and_density_disagreement_requires_review(self):
         from app.adapters import DensityResult
 

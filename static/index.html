@@ -104,6 +104,10 @@
           </select>
         </label>
         <p class="muted sm detector-profile-note" id="detector-profile-note">Dense mode uses a larger image and lower confidence threshold. It can improve small-person recall, with slower inference and more false detections.</p>
+        <label class="fld detector-profile-label">Detector model
+          <select id="model-select" aria-label="Detector model"></select>
+        </label>
+        <p class="muted sm detector-profile-note" id="model-note">Loading the model registry…</p>
       </section>
 
       <!-- ---------------------------- INSIGHTS --------------------------- -->
@@ -346,6 +350,24 @@
         <p class="muted sm note">Select four ground points, then enter each point’s measured X/Y coordinates in metres. Use surveyed distances; calibration affects reported area density.</p>
         <button id="btn-calibrate" class="btn ghost sm">＋ Calibrate ground plane</button>
         <p id="calibration-note" class="muted sm note" aria-live="polite">No calibration wizard started.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Dense-count validation</h2><span class="pill" id="validation-state">ADVISORY</span></div>
+        <p class="muted sm note">Record a hand count against the current independent estimate. Promotion requires calibrated geometry and enough checked samples.</p>
+        <label class="fld">Estimator
+          <select id="validation-source">
+            <option value="head_point">Head points (PET)</option>
+            <option value="density">Density map (DM-Count)</option>
+          </select>
+        </label>
+        <label class="fld">Manual count <input id="validation-manual" type="number" min="0" step="1" placeholder="Hand-counted people"/></label>
+        <div class="area-actions">
+          <button id="btn-validation-sample" class="btn ghost sm">Record check</button>
+          <button id="btn-validation-promote" class="btn primary sm">Promote estimate</button>
+          <button id="btn-validation-revoke" class="btn ghost sm danger">Revoke</button>
+        </div>
+        <p id="validation-note" class="muted sm note" aria-live="polite">No validation checks recorded for this source.</p>
       </div>
 
       <div class="card">
