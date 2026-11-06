@@ -3,22 +3,22 @@
 
 def make_counter():
     """The most accurate counter that can run here: point model, density model, then YOLO."""
-    from crowdshield.monitor import points_to_grid
+    from .monitor import points_to_grid
 
     try:
-        from crowdshield.points import load_point_model, point_grid
+        from .points import load_point_model, point_grid
 
         load_point_model()
         return point_grid, "point model (PET)"
     except Exception:
         pass
     try:
-        from crowdshield.density import density_grid, load_density_model, DEFAULT_WEIGHTS
+        from .density import density_grid, load_density_model, DEFAULT_WEIGHTS
 
         load_density_model(str(DEFAULT_WEIGHTS))
         return density_grid, "density model (DM-Count)"
     except Exception:
-        from crowdshield.detection import detect_people, load_detector
+        from .detection import detect_people, load_detector
 
         if load_detector("crowd_yolo") is None:
             return None, "no counting model is installed (needs PyTorch and Ultralytics)"

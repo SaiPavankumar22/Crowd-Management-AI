@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import metrics
+from . import config, metrics
 from .tiling import (TilingPolicy, compute_tiles, crop, merge_tile_results,
                      offset_boxes)
 
@@ -190,6 +190,17 @@ KNOWN_MODELS: dict[str, ModelSpec] = {
 }
 
 
+def _weight_path(name: str) -> str:
+    """Prefer the organized local model directory while preserving model IDs.
+
+    API callers and persisted camera profiles continue to use names such as
+    ``yolo26n.pt``; only the filesystem lookup moves into ``models/``.
+    Missing weights still fall through to Ultralytics' normal download path.
+    """
+    candidate = Path(config.MODELS_DIR) / Path(name).name
+    return str(candidate) if candidate.is_file() else name
+
+
 def model_available(name: str) -> bool:
     """True when this model's backend dependencies are importable.
 
@@ -265,7 +276,7 @@ class UltralyticsDetector(DetectorAdapter):
         from ultralytics import YOLO
 
         with self._lock:
-            self._model = YOLO(self.name)
+            self._model = YOLO(_weight_path(self.name))
         return self
 
     @property
@@ -344,7 +355,7 @@ class RTDETRDetector(UltralyticsDetector):
         from ultralytics import RTDETR
 
         with self._lock:
-            self._model = RTDETR(self.name)
+            self._model = RTDETR(_weight_path(self.name))
         return self
 
 
@@ -673,7 +684,7 @@ class NullPointEstimator(PointEstimator):
     def info(self) -> dict:
         return {"name": self.name, "version": self.version, "validated": False,
                 "available": False,
-                "note": "Set CROWD_POINT_BACKEND=crowdshield after installing Crowd Shield"}
+                "note": "Set CROWD_POINT_BACKEND=dense after installing dense checkpoints"}
 
 
 def _point_zone_counts(points: np.ndarray, zone_masks: list | None,
@@ -699,24 +710,24 @@ def _point_zone_counts(points: np.ndarray, zone_masks: list | None,
     return counts
 
 
-class CrowdShieldPointEstimator(PointEstimator):
-    """Adapter for Crowd Shield's PET ``count_points`` integration.
+class DensePointEstimator(PointEstimator):
+    """Adapter for the dense PET ``count_points`` service.
 
-    Crowd Shield owns the PET network definition and checkpoint loading.  This
-    adapter imports its documented public API only, which keeps this app free
-    from checkpoint-specific model code and preserves the original BGR input
-    and point-coordinate convention.
+    The service package owns the PET network definition and checkpoint loading.
+    This adapter imports its public API only, which keeps the app free from
+    checkpoint-specific model code and preserves the original BGR input and
+    point-coordinate convention.
     """
 
-    name = "crowdshield-pet"
+    name = "dense-pet"
     version = "pet-shab-vgg16bn"
 
     def __init__(self, validated: bool = False):
-        # app/crowd_shield.py pins the vendored definitions to models/pet_shab.pth
+        # backend/app/dense.py pins the service definitions to models/pet_shab.pth
         # and verifies its checksum before anything is loaded.
-        from . import crowd_shield
+        from . import dense
 
-        self._count_points = crowd_shield.count_points
+        self._count_points = dense.count_points
         self.validated = validated
         self._lock = threading.Lock()
 
@@ -726,9 +737,9 @@ class CrowdShieldPointEstimator(PointEstimator):
         with self._lock:
             result = self._count_points(frame)
         if not isinstance(result, dict):
-            raise RuntimeError("Crowd Shield PET returned an unsupported result")
+            raise RuntimeError("Dense PET returned an unsupported result")
         raw_points = np.asarray(result.get("points", []), dtype=np.float32).reshape(-1, 2)
-        # Crowd Shield documents points as (row, column); Godavari uses x/y.
+        # Service documents points as (row, column); Godavari uses x/y.
         points = raw_points[:, ::-1] if len(raw_points) else raw_points
         raw_count = int(result.get("raw_count", len(points)))
         corrected = result.get("count")
@@ -747,16 +758,16 @@ class CrowdShieldPointEstimator(PointEstimator):
         )
 
 
-class CrowdShieldDensityEstimator(DensityEstimator):
-    """Adapter for Crowd Shield's documented DM-Count inference function."""
+class DenseDensityEstimator(DensityEstimator):
+    """Adapter for the dense DM-Count service."""
 
-    name = "crowdshield-dm-count"
+    name = "dense-dm-count"
     version = "dmcount-shab-vgg19"
 
     def __init__(self, validated: bool = False):
-        from . import crowd_shield
+        from . import dense
 
-        self._estimate_density = crowd_shield.estimate_density
+        self._estimate_density = dense.estimate_density
         self.validated = validated
         self._lock = threading.Lock()
 
@@ -765,8 +776,8 @@ class CrowdShieldDensityEstimator(DensityEstimator):
         with self._lock:
             result = self._estimate_density(frame)
         if not isinstance(result, dict) or result.get("count") is None:
-            raise RuntimeError("Crowd Shield DM-Count returned no count")
-        # Crowd Shield returns the map under "density"; accept the older key too.
+            raise RuntimeError("Dense DM-Count returned no count")
+        # Service returns the map under "density"; accept the older key too.
         density_map = result.get("density", result.get("density_map"))
         density_map = (np.asarray(density_map, dtype=np.float32)
                        if density_map is not None else None)
@@ -797,7 +808,7 @@ class NullDensityEstimator(DensityEstimator):
     def info(self) -> dict:
         return {"name": self.name, "version": self.version, "validated": False,
                 "available": False,
-                "note": "Set CROWD_DENSITY_MODEL to a cleared checkpoint to enable"}
+                "note": "Set CROWD_DENSITY_BACKEND=dense with models/dmcount_shab.pth"}
 
 
 def _density_zone_counts(density_map: np.ndarray | None,

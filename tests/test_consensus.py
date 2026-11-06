@@ -18,13 +18,13 @@ def detection(count=148, primary=6):
 def points(total, raw=10):
     return PointResult(points=np.zeros((raw, 2), np.float32), raw_count=raw,
                        corrected_count=total, zone_counts={}, confidence="advisory",
-                       inference_ms=1.0, model_name="crowdshield-pet",
+                       inference_ms=1.0, model_name="dense-pet",
                        model_version="pet-shab-vgg16bn")
 
 
 def density(total):
     return DensityResult(total_count=total, zone_counts={}, confidence="advisory",
-                         inference_ms=1.0, model_name="crowdshield-dm-count",
+                         inference_ms=1.0, model_name="dense-dm-count",
                          model_version="dmcount-shab-vgg19")
 
 

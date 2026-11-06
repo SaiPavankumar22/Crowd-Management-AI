@@ -21,7 +21,7 @@ import numpy as np
 import supervision as sv
 
 from . import config, store
-from .adapters import (CrowdShieldDensityEstimator, CrowdShieldPointEstimator,
+from .adapters import (DenseDensityEstimator, DensePointEstimator,
                        NullDensityEstimator, NullPointEstimator,
                        TorchscriptDensityEstimator)
 from .alerting import AlertEngine
@@ -767,11 +767,11 @@ class CameraWorker(threading.Thread):
 
 def build_density_estimator():
     """Density is opt-in: an unvalidated checkpoint must not silently count."""
-    if config.DENSITY_BACKEND == "crowdshield":
+    if config.DENSITY_BACKEND == "dense":
         try:
-            return CrowdShieldDensityEstimator(validated=config.DENSITY_VALIDATED)
+            return DenseDensityEstimator(validated=config.DENSITY_VALIDATED)
         except Exception as exc:  # noqa: BLE001 - detector operation continues
-            store.add_audit("density.load.failed", "system", "crowdshield",
+            store.add_audit("density.load.failed", "system", "dense",
                             {"error": str(exc)})
             return NullDensityEstimator()
     if not config.DENSITY_MODEL:
@@ -787,12 +787,12 @@ def build_density_estimator():
 
 def build_point_estimator():
     """Load the optional PET path without making detector startup depend on it."""
-    if config.POINT_BACKEND != "crowdshield":
+    if config.POINT_BACKEND != "dense":
         return NullPointEstimator()
     try:
-        return CrowdShieldPointEstimator(validated=config.POINT_MODEL_VALIDATED)
+        return DensePointEstimator(validated=config.POINT_MODEL_VALIDATED)
     except Exception as exc:  # noqa: BLE001 - dense inference is an optional path
-        store.add_audit("points.load.failed", "system", "crowdshield",
+        store.add_audit("points.load.failed", "system", "dense",
                         {"error": str(exc)})
         return NullPointEstimator()
 

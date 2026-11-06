@@ -1,7 +1,9 @@
 """Central configuration. Every value can be overridden with an env var."""
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# backend/app/config.py → backend/ → repository root
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(BACKEND_DIR)
 # Heavy folders (uploads / samples / alert DB) can live anywhere -- point them
 # at a drive with real free space via env vars (see start_dev.sh).
 def _dir(env_var: str, default: str) -> str:
@@ -56,7 +58,7 @@ def env_bool(name: str, default: bool) -> bool:
 # clips it recovers far more people than RT-DETR (156 vs 36 on the 1080p crowd)
 # because the detail pass is triggered by a near-empty full-frame count. RT-DETR
 # is one switch away and wins on medium-density scenes; see docs/DETECTORS.md.
-MODEL_NAME = os.environ.get("CROWD_MODEL", "yolo26n.pt").strip()
+MODEL_NAME = os.environ.get("CROWD_MODEL", "yolo26n.pt").strip() or "yolo26n.pt"
 FALLBACK_MODELS = ["yolo26n.pt", "yolo11n.pt", "yolov8n.pt"]
 # Every family an operator may switch to, in picker order. The first entry of
 # CROWD_MODELS stays the default; CROWD_MODEL_CHOICES can narrow or extend this
@@ -133,18 +135,22 @@ MODE_HYSTERESIS_FRAMES = int(os.environ.get("CROWD_MODE_HYSTERESIS_FRAMES", "3")
 # Density output is advisory until an operator signs off a validation gate.
 DENSITY_MODEL = os.environ.get("CROWD_DENSITY_MODEL", "").strip()
 DENSITY_VALIDATED = env_bool("CROWD_DENSITY_VALIDATED", False)
-# Checkpoints for the vendored Crowd Shield models (app/crowd_shield.py).
+# Checkpoints for the dense PET / DM-Count service (backend/app/dense.py).
 MODELS_DIR = _dir("CROWD_MODELS_DIR", os.path.join(BASE_DIR, "models"))
 # PET's ShanghaiTech count correction is fitted on foreign footage; plan.md
 # keeps it off until local validation, so the default is raw head points.
 PET_CORRECTION_ENABLED = env_bool("CROWD_PET_CORRECTION", False)
 DENSITY_PERIOD_S = float(os.environ.get("CROWD_DENSITY_PERIOD_S", "1.5"))
 CALIBRATED_DENSITY_ENABLED = env_bool("CROWD_CALIBRATED_DENSITY", False)
-# Crowd Shield installs a ``crowdshield`` Python package that owns the PET and
-# DM-Count architectures plus their checkpoints.  Keeping it optional means a
-# detector-only node remains reliable when dense-estimation dependencies fail.
+# Dense estimators are optional: a detector-only node stays reliable when the
+# PET / DM-Count service or checkpoints are unavailable. Value: "dense".
 POINT_BACKEND = os.environ.get("CROWD_POINT_BACKEND", "").strip().lower()
 DENSITY_BACKEND = os.environ.get("CROWD_DENSITY_BACKEND", "").strip().lower()
+# Accept the legacy backend name so older .env files keep working.
+if POINT_BACKEND == "crowdshield":
+    POINT_BACKEND = "dense"
+if DENSITY_BACKEND == "crowdshield":
+    DENSITY_BACKEND = "dense"
 POINT_MODEL_VALIDATED = env_bool("CROWD_POINT_MODEL_VALIDATED", False)
 POINT_PERIOD_S = float(os.environ.get("CROWD_POINT_PERIOD_S", "1.5"))
 # A promotion needs enough manually checked samples to be meaningful.  These

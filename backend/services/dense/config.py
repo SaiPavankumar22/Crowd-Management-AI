@@ -3,7 +3,8 @@
 import os
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# backend/services/dense → repository root (models/, data/, …)
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Photos are shrunk so their longer side is at most this many pixels before counting. The
 # networks' memory grows with pixel count, so a small server needs a smaller limit.

@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
@@ -11,6 +12,12 @@ from dotenv import load_dotenv
 # Load the repository-root .env for local development. Docker Compose also
 # passes these values explicitly to the container.
 load_dotenv()
+
+# Application code lives under backend/; keep `import app` and
+# `import services` working for run.py, tests, and tools.
+_BACKEND = Path(__file__).resolve().parent / "backend"
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
 
 
 class JsonLogFormatter(logging.Formatter):

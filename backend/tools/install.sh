@@ -2,7 +2,7 @@
 # Deps installer for the Godavari crowd monitor.
 # Creates a project-local venv at ./.venv (override with GODAVARI_VENV=...).
 set -u
-cd "$(dirname "$0")/.." || exit 1
+cd "$(dirname "$0")/../.." || exit 1
 
 VENV="${GODAVARI_VENV:-$(pwd)/.venv}"
 if [ ! -f "$VENV/Scripts/python.exe" ] && [ ! -f "$VENV/bin/python" ]; then

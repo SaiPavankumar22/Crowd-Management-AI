@@ -24,10 +24,10 @@ from functools import lru_cache
 import numpy as np
 
 from .config import MIN_SIDE, REPO_ROOT, default_max_side, default_work_side, fit_max_side
-from .weights import RELEASES, fetch
+from .weights import fetch
 
 WEIGHTS = REPO_ROOT / "models" / "pet_qnrf.pth"
-WEIGHTS_URL = f"{RELEASES}/pet-qnrf-v1/pet_qnrf.pth"
+WEIGHTS_URL = None
 WEIGHTS_SHA256 = "e8476157d314606f143947b0f94d4f915e5f22ef11e26e69d5188ce0f0a2ed92"
 CORRECTION = (1.340, 0.947)  # true ≈ a * raw ** b, fitted on held-out training photos
 MAX_SIDE = default_max_side()  # kept for callers that read it; counting uses WORK_SIDE below

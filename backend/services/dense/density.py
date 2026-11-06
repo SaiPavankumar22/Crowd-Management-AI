@@ -15,11 +15,11 @@ from pathlib import Path
 import numpy as np
 
 from .config import REPO_ROOT, default_max_side, fit_max_side
-from .weights import RELEASES, fetch
+from .weights import fetch
 
 # Trained on ShanghaiTech A + B with an honest held-out split; see the release notes.
 DEFAULT_WEIGHTS = REPO_ROOT / "models" / "dmcount_shab.pth"
-WEIGHTS_URL = f"{RELEASES}/dmcount-shab-v1/dmcount_shab.pth"
+WEIGHTS_URL = None
 WEIGHTS_SHA256 = "d6f72bffcd1ea986011796b43a63e2738fe8c97d19d230ef99286b603ea207b9"
 # Very large photos are shrunk first: the network's memory grows with pixel count.
 # Small free servers can set CROWDSHIELD_MAX_SIDE lower (e.g. 1280).
