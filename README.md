@@ -62,8 +62,8 @@ Windows, from the project folder (everything — venv, uploads, clips, alert DB 
 `D:`, nothing is written to the system drive):
 
 ```bash
-bash tools/install.sh       # creates ./.venv and installs pinned deps
-bash tools/start_dev.sh     # serves http://127.0.0.1:8000
+bash backend/tools/install.sh       # creates ./.venv and installs pinned deps
+bash backend/tools/start_dev.sh     # serves http://127.0.0.1:8000
 ```
 
 `tools\start_dev.bat` does the same from Explorer. Then open **http://127.0.0.1:8000** and:
@@ -76,7 +76,7 @@ bash tools/start_dev.sh     # serves http://127.0.0.1:8000
 3. Watch the zone rail and the feed. A zone turns yellow → orange → red as it fills;
    sustained overload appears in the alert stream and fires a chime.
 
-Linux/macOS: the same scripts work (`tools/install.sh` creates `.venv/bin/python`).
+Linux/macOS: the same scripts work (`backend/tools/install.sh` creates `.venv/bin/python`).
 
 ---
 
@@ -113,7 +113,7 @@ events, count samples and heatmaps to MongoDB collections. Uploaded video and ev
 remain on the local volume. MongoDB outages do not stop inference or local writes; check
 `mongodb` in `/api/system` for archive connection and queue status.
 An existing SQLite history can be migrated to Atlas at any time. Migrate history with
-`python tools/migrate_sqlite_to_mongo.py --apply` (run
+`python backend/tools/migrate_sqlite_to_mongo.py --apply` (run
 inside the container with `--sqlite /app/.data/data/crowd.db --cameras
 /app/.data/data/cameras.json`). The migration uses idempotent upserts and can be rerun
 safely.
@@ -175,7 +175,7 @@ Crowd Shield checkpoints in `models/`:
 | PET | `models/pet_shab.pth` | One point per visible head: count **and** locations, per area |
 | DM-Count | `models/dmcount_shab.pth` | A density map; the map sums to a count, integrated per area |
 
-The network definitions are vendored in `third_party/crowdshield` (academic-use
+The network definitions live in `backend/services/dense` (academic-use
 licence), and each load verifies the checkpoint's SHA-256 before use. The
 checkpoints themselves are not committed (large binaries, academic licence): drop
 them in `models/` or point `CROWD_MODELS_DIR` at them. Without them the service
@@ -207,8 +207,8 @@ of GPU memory (2.6 → 6.3 GB) and no dropped frames. PET's ShanghaiTech count c
 foreign footage, so a camera has to earn it locally.
 
 ```bash
-CROWD_POINT_BACKEND=crowdshield     # enable PET head points
-CROWD_DENSITY_BACKEND=crowdshield   # enable DM-Count density
+CROWD_POINT_BACKEND=dense     # enable PET head points
+CROWD_DENSITY_BACKEND=dense   # enable DM-Count density
 CROWD_POINT_PERIOD_S=5              # advisory cadence per camera
 CROWD_DENSITY_PERIOD_S=6
 CROWD_MODELS_DIR=./models           # where the .pth files live
@@ -447,7 +447,7 @@ curl -s localhost:8000/api/audit | jq
 Benchmark any model/tiling combination on the same clips:
 
 ```bash
-python tools/bench_models.py --clips samples/a.mp4 samples/b.mp4 \
+python backend/tools/bench_models.py --clips samples/a.mp4 samples/b.mp4 \
     --models yolo26n.pt --tiling off,2x2,3x3 --frames 30
 ```
 
@@ -485,9 +485,8 @@ Every setting is an environment variable; nothing needs editing in code.
 | `CROWD_DENSE_BOX_HEIGHT_PX` | `32` | Small-box threshold that marks a scene dense |
 | `CROWD_DENSITY_MODEL` | empty | TorchScript density checkpoint (advisory only) |
 | `CROWD_DENSITY_VALIDATED` | `0` | Set only after a signed per-camera validation gate |
-| `INSTALL_CROWD_SHIELD` | `0` | Docker build argument that installs the optional PET / DM-Count package |
-| `CROWD_POINT_BACKEND` | empty | Set to `crowdshield` to enable PET head-point estimates |
-| `CROWD_DENSITY_BACKEND` | empty | Set to `crowdshield` to enable DM-Count density estimates |
+| `CROWD_POINT_BACKEND` | empty | Set to `dense` to enable PET head-point estimates |
+| `CROWD_DENSITY_BACKEND` | empty | Set to `dense` to enable DM-Count density estimates |
 | `CROWD_POINT_MODEL_VALIDATED` | `0` | Enables a validated PET checkpoint for a camera promotion gate |
 | `CROWD_POINT_PERIOD_S` / `CROWD_DENSITY_PERIOD_S` | `1.5` / `1.5` | Rate limit for independent dense-model inference |
 | `CROWD_VALIDATION_MIN_SAMPLES` | `20` | Hand-counted samples required before a per-camera promotion |
@@ -576,7 +575,7 @@ curl -X PUT localhost:8000/api/cameras/<id>/zones -H 'content-type: application/
 └── matplotlib/
 ```
 
-The dev scripts (`tools/start_dev.sh`) relocate `data/`, `uploads/` and `samples/` into
+The dev scripts (`backend/tools/start_dev.sh`) relocate `data/`, `uploads/` and `samples/` into
 `.data/` and put the Ultralytics/torch/matplotlib caches there too, so nothing lands outside
 the project. `.venv/`, `.data/` and `.tmp/` are gitignored; in Docker the whole `.data` tree
 is one volume. Media paths are stored absolute, but if a file moves the app re-resolves it by
@@ -593,8 +592,8 @@ provenance, licences, and what each one is good for in
 **[docs/FOOTAGE.md](docs/FOOTAGE.md)**. Fetch or extend it with:
 
 ```bash
-./.venv/Scripts/python.exe tools/fetch_footage.py --list
-./.venv/Scripts/python.exe tools/fetch_footage.py                # fetch what's missing
+./.venv/Scripts/python.exe backend/tools/fetch_footage.py --list
+./.venv/Scripts/python.exe backend/tools/fetch_footage.py                # fetch what's missing
 ```
 
 Four of the clips carry Creative Commons licences (three CC BY 2.0, one non-commercial); the
@@ -626,12 +625,12 @@ TimescaleDB, and how to size a single L40S for ~100 cameras — is in
 
 | Tool | What it does |
 |---|---|
-| `tools/install.sh` / `tools/start_dev.sh` / `tools/start_dev.bat` | Project-local venv, pinned deps, server start |
-| `tools/ui_check.py` | Renders the dashboard in headless Chromium over CDP, prints DOM facts, fails on console errors, saves a screenshot — no GUI needed |
-| `tools/fetch_footage.py` | Downloads/trims the test clip library and writes `manifest.json` |
+| `backend/tools/install.sh` / `start_dev.sh` / `start_dev.bat` | Project-local venv, pinned deps, server start |
+| `backend/tools/ui_check.py` | Renders the dashboard in headless Chromium over CDP, prints DOM facts, fails on console errors, saves a screenshot — no GUI needed |
+| `backend/tools/fetch_footage.py` | Downloads/trims the test clip library and writes `manifest.json` |
 
 ```bash
-./.venv/Scripts/python.exe tools/ui_check.py http://127.0.0.1:8000/ shot.png
+./.venv/Scripts/python.exe backend/tools/ui_check.py http://127.0.0.1:8000/ shot.png
 ```
 
 ---
@@ -653,7 +652,7 @@ app/
   adapters.py    Detector/estimator adapters (YOLO, RT-DETR, RF-DETR, D-FINE, PET, DM-Count)
   detail.py      Detail-pass escalation for small people
   router.py      Counting router: detector floor vs dense estimates
-  crowd_shield.py PET / DM-Count wrappers with checksum-verified checkpoints
+  dense.py       PET / DM-Count wrappers with checksum-verified checkpoints
   zones.py       Zone model, occupancy/density, level thresholds
   alerting.py    Sustained-threshold alert engine with hysteresis and cooldown
   outbox.py      Durable alert outbox with HMAC webhook transport
@@ -664,8 +663,10 @@ app/
   auth.py        Optional operator/viewer API tokens
   config.py      Env-var configuration
 static/          Dashboard (index.html, app.js, style.css)
-tools/           Install, start, headless UI check, footage fetcher, benchmarks
-third_party/     Vendored Crowd Shield definitions (academic licence)
+backend/         Application code, dense services, and operator tools
+  app/           FastAPI app, pipeline, adapters
+  services/dense PET + DM-Count network definitions
+  tools/         Install, start, UI check, footage fetcher, benchmarks
 docs/            Architecture, deployment, footage, screenshots, results report
 Dockerfile, docker-compose.yml, docker-compose.gpu.yml
 ```

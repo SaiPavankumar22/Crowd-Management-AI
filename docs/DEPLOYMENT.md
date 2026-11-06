@@ -22,7 +22,7 @@ camera.
 | Alert history | `.data/data/crowd.db` (SQLite) | yes |
 | Uploaded clips | `.data/uploads/` | yes |
 | Sample clip library | `.data/samples/` | yes, if you keep the folder |
-| Model weights | `/app/yolo26n.pt` (image) or `.data/...` cache | yes |
+| Model weights | `/app/models/yolo26n.pt` (image) or `.data/...` cache | yes |
 | Live counts, tracks, heatmap | process memory | no — rebuilt from video in seconds |
 
 That single-process design is deliberate and it constrains deployment:
@@ -73,7 +73,7 @@ docker build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128 
 
 To include PET head points and DM-Count in an edge image, add
 `--build-arg INSTALL_CROWD_SHIELD=1`. Enable the paths at runtime with
-`CROWD_POINT_BACKEND=crowdshield` and/or `CROWD_DENSITY_BACKEND=crowdshield`.
+`CROWD_POINT_BACKEND=dense` and/or `CROWD_DENSITY_BACKEND=dense`.
 They start as independent advisory estimates. The dashboard records hand-count
 checks per camera and only permits a selected dense count after calibration,
 the configured sample count and error threshold are met.
@@ -245,7 +245,7 @@ already parameterised from your shell (`CROWD_MODEL=... docker compose up -d`).
 | `CROWD_DATA_DIR` | `/app/.data/data` | `cameras.json`, `crowd.db` |
 | `CROWD_UPLOADS_DIR` | `/app/.data/uploads` | Uploaded clips |
 | `CROWD_SAMPLES_DIR` | `/app/.data/samples` | Sample library (supports one level of subfolders) |
-| `CROWD_POINT_BACKEND` / `CROWD_DENSITY_BACKEND` | empty | Set either to `crowdshield` to enable PET / DM-Count on a dense node |
+| `CROWD_POINT_BACKEND` / `CROWD_DENSITY_BACKEND` | empty | Set either to `dense` to enable PET / DM-Count on a dense node |
 | `CROWD_POINT_MODEL_VALIDATED` / `CROWD_DENSITY_VALIDATED` | `0` | Allow that checkpoint to pass a per-camera promotion gate |
 | `CROWD_VALIDATION_MIN_SAMPLES` | `20` | Manual checks required before dense-source promotion |
 | `CROWD_VALIDATION_MAX_MAPE` | `0.20` | Maximum mean absolute percentage error accepted at promotion |

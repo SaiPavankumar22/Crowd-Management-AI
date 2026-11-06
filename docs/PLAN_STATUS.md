@@ -16,8 +16,8 @@ Numbers below are measured, not claimed.
 | SHA-256 (checked on load) | `5a7c6590e619…` | `d6f72bffcd1e…` |
 | Architecture | PET point model, VGG16-BN backbone, quadtree | DM-Count, VGG19 + 2× upsample head |
 | Role | head points, dense crowds | density map, aggregate cross-check |
-| Wrapper | `app/crowd_shield.py` → `CrowdShieldPointEstimator` | `app/crowd_shield.py` → `CrowdShieldDensityEstimator` |
-| Definitions | vendored in `third_party/crowdshield` (Crowd Shield, academic-use) | same |
+| Wrapper | `backend/app/dense.py` → `DensePointEstimator` | `backend/app/dense.py` → `DenseDensityEstimator` |
+| Definitions | `backend/services/dense` (academic-use) | same |
 
 plan §5.5's ten steps: weights kept in an ignored local directory (1), checksums
 pinned and verified before every load (2), original definitions vendored (3),
@@ -158,8 +158,8 @@ API auth on the same instance: anonymous read 401, viewer read 200, viewer write
 ## Enabling and checking it
 
 ```bash
-CROWD_POINT_BACKEND=crowdshield       # PET head points
-CROWD_DENSITY_BACKEND=crowdshield     # DM-Count density
+CROWD_POINT_BACKEND=dense       # PET head points
+CROWD_DENSITY_BACKEND=dense     # DM-Count density
 CROWD_POINT_PERIOD_S=5                # advisory cadence, per camera
 CROWD_DENSITY_PERIOD_S=6
 CROWD_MODELS_DIR=/path/to/models      # optional, defaults to ./models
