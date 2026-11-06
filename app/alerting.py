@@ -64,7 +64,7 @@ class AlertEngine:
 
     def _alert(self, zone, level: str, message: str) -> dict:
         return {
-            "id": uuid.uuid4().hex[:10],
+            "id": uuid.uuid4().hex,
             "cam_id": self.cam_id,
             "cam_name": self.cam_name,
             "zone": zone.name,

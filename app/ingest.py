@@ -1,10 +1,17 @@
 """Video source helpers: uploaded files, bundled samples, RTSP, webcam."""
 import os
+import threading
 import uuid
 
 from fastapi import UploadFile
 
 from . import config
+
+_upload_lock = threading.Lock()
+
+
+class UploadTooLarge(ValueError):
+    pass
 
 
 def _valid_video_name(name: str) -> bool:
@@ -17,12 +24,23 @@ def save_upload(upload: UploadFile) -> str:
                          f"(allowed: {', '.join(config.VIDEO_EXTS)})")
     ext = os.path.splitext(upload.filename)[1].lower()
     path = os.path.join(config.UPLOADS_DIR, f"{uuid.uuid4().hex}{ext}")
-    with open(path, "wb") as fh:
-        while True:
-            chunk = upload.file.read(1024 * 1024)
-            if not chunk:
-                break
-            fh.write(chunk)
+    written = 0
+    try:
+        with _upload_lock, open(path, "wb") as fh:
+            while True:
+                chunk = upload.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > config.MAX_UPLOAD_BYTES:
+                    raise UploadTooLarge(f"video exceeds maximum size of {config.MAX_UPLOAD_BYTES} bytes")
+                fh.write(chunk)
+    except Exception:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        raise
     return path
 
 

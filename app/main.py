@@ -1,5 +1,6 @@
 """FastAPI app: REST API, UploadFile/stream upload, MJPEG streams, WebSocket push."""
 import asyncio
+import math
 import os
 import time
 import urllib.parse
@@ -14,6 +15,7 @@ from .mongo_sync import mirror as mongo_mirror, mirror_camera
 from .calibration import validate_calibration
 from .detector import ModelManager
 from .pipeline import CameraRegistry, new_camera_id
+from .privacy import source_display_name
 
 model = ModelManager(config.MODEL_NAME, config.FALLBACK_MODELS,
                      config.CONF_THRESHOLD, config.IMGSZ)
@@ -24,6 +26,48 @@ app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 
 _ws_clients: set[WebSocket] = set()
 START_TS = time.time()
+
+
+class UploadLimitMiddleware:
+    """Reject oversized camera uploads before Starlette spools multipart data."""
+    def __init__(self, application, limit: int):
+        self.application, self.limit = application, limit
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") != "/api/cameras" or scope.get("method") != "POST":
+            return await self.application(scope, receive, send)
+        headers = dict(scope.get("headers", []))
+        length = headers.get(b"content-length")
+        if length:
+            try:
+                if int(length) > self.limit + 1024 * 1024:
+                    return await self._too_large(send)
+            except ValueError:
+                pass
+        total = 0
+        async def limited_receive():
+            nonlocal total
+            message = await receive()
+            if message["type"] == "http.request":
+                total += len(message.get("body", b""))
+                if total > self.limit + 1024 * 1024:
+                    raise OverflowError
+            return message
+        try:
+            await self.application(scope, limited_receive, send)
+        except OverflowError:
+            await self._too_large(send)
+
+    @staticmethod
+    async def _too_large(send):
+        body = b"upload exceeds configured size limit"
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(UploadLimitMiddleware, limit=config.MAX_UPLOAD_BYTES)
 
 
 @app.on_event("startup")
@@ -110,6 +154,8 @@ async def add_camera(request: Request):
     if upload is not None and upload.filename:
         try:
             path = await asyncio.to_thread(ingest.save_upload, upload)
+        except ingest.UploadTooLarge as exc:
+            raise HTTPException(413, str(exc))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         cfg = make_cfg(cam_name(os.path.splitext(os.path.basename(upload.filename))[0]),
@@ -126,7 +172,7 @@ async def add_camera(request: Request):
         low = src.lower()
         if low.startswith("rtsp://") or low.startswith("rtsps://") or \
            low.startswith("http://") or low.startswith("https://"):
-            cfg = make_cfg(cam_name(src[:40]), "rtsp", src, True)
+            cfg = make_cfg(cam_name(source_display_name(src)), "rtsp", src, True)
         elif src.isdigit():
             cfg = make_cfg(cam_name(f"Webcam {src}"), "webcam", src, False)
         else:
@@ -235,8 +281,10 @@ async def put_count_lines(cam_id: str, request: Request):
         for i, line in enumerate(lines):
             if not isinstance(line, dict): raise ValueError("each line must be an object")
             pts = [line.get("a"), line.get("b")]
-            if any(not isinstance(p, list) or len(p) != 2 or any(float(v) < 0 or float(v) > 1 for v in p) for p in pts):
+            if any(not isinstance(p, list) or len(p) != 2 or any(not math.isfinite(float(v)) or float(v) < 0 or float(v) > 1 for v in p) for p in pts):
                 raise ValueError("line endpoints must be normalized [x,y] pairs")
+            if pts[0] == pts[1]:
+                raise ValueError("line endpoints must differ")
             cleaned.append({"id": str(line.get("id") or f"line-{i+1}"),
                             "name": str(line.get("name") or f"Line {i+1}")[:60],
                             "a": [float(v) for v in pts[0]], "b": [float(v) for v in pts[1]],
@@ -416,7 +464,7 @@ async def put_calibration(cam_id: str, request: Request):
     try:
         data = await request.json()
         calibration = validate_calibration(data)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, AttributeError) as exc:
         raise HTTPException(400, f"invalid calibration: {exc}")
     # Calibration is versioned and attributed, so an alert can always be traced
     # back to the geometry that produced it (improvement.md §5).
@@ -442,7 +490,8 @@ async def ack_alert(alert_id: str, request: Request):
     by = "operator"
     try:
         body = await request.json()
-        by = str(body.get("by") or by)[:60]
+        if isinstance(body, dict):
+            by = str(body.get("by") or by)[:60]
     except Exception:
         pass
     row = registry.outbox.ack(alert_id, by)
@@ -459,13 +508,19 @@ async def close_alert(alert_id: str, request: Request):
     by = "operator"
     try:
         body = await request.json()
-        by = str(body.get("by") or by)[:60]
+        if isinstance(body, dict):
+            by = str(body.get("by") or by)[:60]
     except Exception:
         pass
     from . import store
+    existing = store.get_alert(alert_id)
+    if existing is None:
+        raise HTTPException(404, "alert not found")
+    if existing.get("status") == "closed":
+        return {"ok": True, "id": alert_id, "status": "closed"}
+    if not (existing.get("ack_by") or existing.get("ack_ts")):
+        raise HTTPException(409, "alert must be acknowledged before it can be closed")
     if not store.close_alert(alert_id, by):
-        if not any(alert["id"] == alert_id for alert in store.recent_alerts(500)):
-            raise HTTPException(404, "alert not found")
         return {"ok": True, "id": alert_id, "status": "closed"}
     store.add_audit("alert.close", by, alert_id, {})
     return {"ok": True, "id": alert_id, "status": "closed", "closed_by": by}
