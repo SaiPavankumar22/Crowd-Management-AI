@@ -1,13 +1,4 @@
-"""Model manager built on the adapter boundary.
-
-The pipeline never sees Ultralytics objects any more: every call returns a
-`DetectionResult` (see `app/adapters.py`). That is what lets a model be
-benchmarked, licensed and swapped without touching tracking, zones or alerts.
-
-Switch semantics follow `improvement.md` §"Model registry":
-load the replacement, warm it, verify it, then swap atomically; a failed load
-leaves the previous model active; every switch is written to the audit log.
-"""
+"""Model manager built on the adapter boundary."""
 from __future__ import annotations
 
 import threading
@@ -21,7 +12,6 @@ from .adapters import (DetectionResult, ModelSpec, TiledDetector,
                        build_detector, model_available, spec_for)
 from .detail import DetailPass
 from .tiling import TilingPolicy
-
 
 class ModelManager:
     def __init__(self, model_name: str, fallbacks: list, conf: float, imgsz: int):

@@ -1,10 +1,4 @@
-"""Shared runtime objects.
-
-One model manager and one camera registry per process, plus the websocket
-fan-out and the system snapshot built from them. Routers import from here
-instead of from `main`, so the application module stays a composition root and
-there are no import cycles.
-"""
+"""Shared runtime objects."""
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +14,6 @@ model = ModelManager(config.MODEL_NAME, config.FALLBACK_MODELS,
 registry = CameraRegistry(model)
 START_TS = time.time()
 ws_clients: set = set()
-
 
 async def broadcaster():
     """Push a full metrics snapshot to every dashboard ~twice a second."""
@@ -43,7 +36,6 @@ async def broadcaster():
                 dead.append(ws)
         for ws in dead:
             ws_clients.discard(ws)
-
 
 def system_info() -> dict:
     info = model.info()

@@ -1,12 +1,4 @@
-"""Durable alert outbox.
-
-The earlier dispatcher fired one thread per alert with in-memory retries: a
-restart or an outage longer than the retry window lost the alert. At event scale that is
-unacceptable -- an alert that was raised must still be delivered after the box
-reboots. This outbox persists every alert before delivery, retries with
-exponential backoff plus jitter, deduplicates on the alert id, and supports
-operator acknowledgement and escalation.
-"""
+"""Durable alert outbox."""
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +15,6 @@ PENDING = "pending"
 DELIVERED = "delivered"
 FAILED = "failed"
 ACKED = "acked"
-
 
 class WebhookTransport:
     """HMAC-signed JSON POST to ALERT_WEBHOOK_URL."""
@@ -52,7 +43,6 @@ class WebhookTransport:
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             if not 200 <= response.status < 300:
                 raise RuntimeError(f"webhook returned HTTP {response.status}")
-
 
 class AlertOutbox:
     def __init__(self, transport=None, *, max_attempts: int | None = None,

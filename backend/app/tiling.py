@@ -1,17 +1,9 @@
-"""Tiled / region-of-interest inference helpers.
-
-improvement.md asks for tiled inference because box detectors lose tiny people
-in wide ghat views: a 1280-px frame with 30-px people becomes 3-4x more pixels
-per person per tile. Tiling costs compute and can duplicate people at tile
-borders, so the merge has to be validated -- hence a real NMS here and a gate
-that only tiles when people are actually small.
-"""
+"""Tiled / region-of-interest inference helpers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
-
 
 @dataclass(frozen=True)
 class Tile:
@@ -19,7 +11,6 @@ class Tile:
     y: int
     w: int
     h: int
-
 
 def compute_tiles(width: int, height: int, rows: int, cols: int,
                   overlap: float = 0.15) -> list[Tile]:
@@ -50,10 +41,8 @@ def compute_tiles(width: int, height: int, rows: int, cols: int,
                 tiles.append(Tile(x, y, w, h))
     return tiles
 
-
 def crop(frame: np.ndarray, tile: Tile) -> np.ndarray:
     return frame[tile.y:tile.y + tile.h, tile.x:tile.x + tile.w]
-
 
 def offset_boxes(boxes: np.ndarray, tile: Tile) -> np.ndarray:
     if len(boxes) == 0:
@@ -62,7 +51,6 @@ def offset_boxes(boxes: np.ndarray, tile: Tile) -> np.ndarray:
     shifted[:, [0, 2]] += tile.x
     shifted[:, [1, 3]] += tile.y
     return shifted
-
 
 def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.55,
         max_det: int = 1000) -> np.ndarray:
@@ -91,7 +79,6 @@ def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.55,
         order = rest[iou <= iou_threshold]
     return np.asarray(keep, dtype=int)
 
-
 def merge_tile_results(boxes: np.ndarray, scores: np.ndarray,
                        iou_threshold: float = 0.55,
                        max_det: int = 1000) -> tuple[np.ndarray, np.ndarray]:
@@ -100,7 +87,6 @@ def merge_tile_results(boxes: np.ndarray, scores: np.ndarray,
     if len(keep) == 0:
         return (np.zeros((0, 4), np.float32), np.zeros((0,), np.float32))
     return (boxes[keep].astype(np.float32), scores[keep].astype(np.float32))
-
 
 @dataclass
 class TilingPolicy:

@@ -230,7 +230,7 @@ async def put_calibration(cam_id: str, request: Request):
     except (ValueError, TypeError, AttributeError) as exc:
         raise HTTPException(400, f"invalid calibration: {exc}")
     # Calibration is versioned and attributed, so an alert can always be traced
-    # back to the geometry that produced it (improvement.md §5).
+    # back to the geometry that produced it (
     previous = cam.get("calibration") or {}
     calibration["version"] = int(previous.get("version", 0)) + 1
     calibration["validated_by"] = str((data or {}).get("validated_by") or "operator")[:60]
@@ -253,7 +253,6 @@ async def put_calibration(cam_id: str, request: Request):
                     {"version": calibration["version"],
                      "inliers": calibration.get("inliers")})
     return {"ok": True, "calibration": calibration}
-
 
 @router.get("/api/samples")
 async def list_samples():

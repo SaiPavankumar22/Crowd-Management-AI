@@ -1,10 +1,4 @@
-"""Best-effort MongoDB Atlas archive; SQLite and local media stay canonical.
-
-Writes are queued off the camera and request threads. Mongo outages never stop
-camera processing or lose the local SQLite copy. Camera documents deliberately
-omit source paths because RTSP URLs can contain credentials and uploaded video
-files remain on the local volume.
-"""
+"""Best-effort MongoDB Atlas archive; SQLite and local media stay canonical."""
 from __future__ import annotations
 
 import logging
@@ -17,7 +11,6 @@ from .privacy import redact_source_credentials
 from . import store
 
 log = logging.getLogger(__name__)
-
 
 class MongoMirror:
     def __init__(self):
@@ -123,9 +116,7 @@ class MongoMirror:
                 "last_error": error,
             }
 
-
 mirror = MongoMirror()
-
 
 def camera_document(camera: dict[str, Any]) -> dict[str, Any] | None:
     """Prepare camera settings without source credentials or local file paths."""
@@ -140,7 +131,6 @@ def camera_document(camera: dict[str, Any]) -> dict[str, Any] | None:
     doc.update({"_id": camera_id, "id": camera_id,
                 "source_config_stored_locally": True})
     return doc
-
 
 def mirror_camera(camera: dict[str, Any]) -> None:
     """Archive camera settings without source credentials or local file paths."""

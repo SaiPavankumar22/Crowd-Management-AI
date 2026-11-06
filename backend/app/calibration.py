@@ -4,7 +4,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-
 def validate_calibration(data: dict | None) -> dict:
     if not isinstance(data, dict):
         raise ValueError("calibration body must be an object")
@@ -33,7 +32,6 @@ def validate_calibration(data: dict | None) -> dict:
         "inliers": int(mask.sum()) if mask is not None else 0,
     }
 
-
 def project_points(points, calibration: dict | None) -> np.ndarray:
     pts = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
     if not calibration or not calibration.get("homography"):
@@ -41,13 +39,11 @@ def project_points(points, calibration: dict | None) -> np.ndarray:
     matrix = np.asarray(calibration["homography"], dtype=np.float64)
     return cv2.perspectiveTransform(pts, matrix).reshape(-1, 2)
 
-
 def polygon_area_world(polygon, calibration: dict | None) -> float | None:
     if not calibration:
         return None
     projected = project_points(polygon, calibration).astype(np.float32)
     return float(abs(cv2.contourArea(projected)))
-
 
 def _points(value) -> np.ndarray:
     try:

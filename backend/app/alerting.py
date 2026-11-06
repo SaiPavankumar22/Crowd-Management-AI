@@ -1,15 +1,6 @@
-"""Alert engine.
-
-Design choices that kill false alarms in practice:
-- WARNING fires once on a rising edge over warn_pct and re-arms below it
-  (hysteresis) instead of spamming every frame.
-- OVERCROWDED (>= 100% capacity) must persist for `sustain_s` seconds before
-  an alert fires; while a zone stays over capacity it re-alerts at most once
-  per `cooldown_s`.
-"""
+"""Alert engine."""
 import time
 import uuid
-
 
 class AlertEngine:
     def __init__(self, cam_id: str, cam_name: str, sustain_s: float, cooldown_s: float):

@@ -1,9 +1,4 @@
-"""FastAPI composition root.
-
-Everything here is wiring: middleware, startup, the dashboard shell and the
-router include. Handlers live in `app/api/` (one module per concern) and the
-shared model/registry objects live in `app.state`.
-"""
+"""FastAPI composition root."""
 import asyncio
 import os
 
@@ -20,7 +15,6 @@ from .state import broadcaster, model, registry
 
 app = FastAPI(title="Godavari Crowd Monitor")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
-
 
 class UploadLimitMiddleware:
     """Reject oversized camera uploads before Starlette spools multipart data."""
@@ -64,10 +58,8 @@ class UploadLimitMiddleware:
                                 (b"content-length", str(len(body)).encode())]})
         await send({"type": "http.response.body", "body": body})
 
-
 app.add_middleware(UploadLimitMiddleware, limit=config.MAX_UPLOAD_BYTES)
 app.add_middleware(ApiAuthMiddleware)
-
 
 class StaticRevalidateMiddleware:
     """Make the dashboard revalidate its JS/CSS instead of trusting a stale copy.
@@ -95,9 +87,7 @@ class StaticRevalidateMiddleware:
 
         await self.application(scope, receive, send_with_header)
 
-
 app.add_middleware(StaticRevalidateMiddleware)
-
 
 @app.on_event("startup")
 async def startup():
@@ -108,16 +98,13 @@ async def startup():
         district_publisher.start()
     asyncio.create_task(_bootstrap())
 
-
 async def _bootstrap():
     await asyncio.to_thread(model.load)
     await asyncio.to_thread(registry.load_and_start)
     await broadcaster()
 
-
 @app.get("/")
 async def index():
     return FileResponse(os.path.join(config.STATIC_DIR, "index.html"))
-
 
 app.include_router(api_router)

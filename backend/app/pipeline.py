@@ -1,15 +1,4 @@
-"""Per-camera pipeline: capture -> detect -> track -> zone count -> density -> alerts.
-
-Architecture:
-- One worker thread per camera keeps N cameras independent (decode pacing,
-  tracking, alerts are per-camera state).
-- Inference is funneled through the shared ModelManager lock, so 1 model
-  serves every camera - memory stays flat as you add cameras.
-- Uploaded/sample files play in real time on loop so the dashboard behaves
-  exactly like live CCTV. RTSP/webcam are natively live; sample videos are
-  inferred at (video fps / TARGET_INFER_FPS) and re-annotated every frame so
-  the rendered feed looks smooth but inference stays cheap.
-"""
+"""Per-camera pipeline: capture -> detect -> track -> zone count -> density -> alerts."""
 import os
 import threading
 import time
@@ -38,10 +27,8 @@ from .zones import SEVERITY, Zone, level_for
 
 BOX_COLOR = (248, 189, 56)  # #38bdf8 (BGR)
 
-
 def new_camera_id() -> str:
     return uuid.uuid4().hex[:8]
-
 
 class CameraWorker(threading.Thread):
     daemon = True
@@ -89,7 +76,7 @@ class CameraWorker(threading.Thread):
         self.count_lines = list(cam.get("count_lines", []))
         self.line_counts = {line.get("id", line.get("name", "line")): {"entry": 0, "exit": 0}
                             for line in self.count_lines}
-        # --- improvement.md: mode router, analytics health, zone versioning ---
+        # --- : mode router, analytics health, zone versioning ---
         self.zone_version = int(cam.get("zones_version", 0))
         self.router = ModeRouter(RouterConfig(
             dense_box_height_px=config.DENSE_BOX_HEIGHT_PX,
@@ -552,7 +539,7 @@ class CameraWorker(threading.Thread):
                 "heatmap": self.heatmap.encode(),
                 "health": self.frame_health.snapshot(),
                 "decoder": self.decoder,
-                # --- improvement.md: explicit estimation state ------------
+                # --- : explicit estimation state ------------
                 "estimation_mode": self._route.get("estimation_mode", "detector"),
                 "mode": self._route.get("mode"),
                 "selected_count": selected_total if self._route else total,
@@ -764,7 +751,6 @@ class CameraWorker(threading.Thread):
             self._raw_cache, self._raw_cache_seq = data, seq
         return data
 
-
 def build_density_estimator():
     """Density is opt-in: an unvalidated checkpoint must not silently count."""
     if config.DENSITY_BACKEND == "dense":
@@ -784,7 +770,6 @@ def build_density_estimator():
                         {"error": str(exc)})
         return NullDensityEstimator()
 
-
 def build_point_estimator():
     """Load the optional PET path without making detector startup depend on it."""
     if config.POINT_BACKEND != "dense":
@@ -795,7 +780,6 @@ def build_point_estimator():
         store.add_audit("points.load.failed", "system", "dense",
                         {"error": str(exc)})
         return NullPointEstimator()
-
 
 class CameraRegistry:
     def __init__(self, model):

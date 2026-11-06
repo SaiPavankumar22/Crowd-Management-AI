@@ -1,13 +1,4 @@
-"""Analytics health: a dead-man's switch for the model, not just the camera.
-
-Camera health (`app/health.py`) already catches stale, frozen, dark and blurry
-feeds. The failure it cannot catch is a *healthy-looking* stream whose analytics
-have silently stopped working -- a model that returns nothing, a scheduler that
-stops dispatching, or a count that collapses from 40 to 0 with no explanation.
-
-For a safety system that is the dangerous case: "zero people" and "we stopped
-measuring" must never look the same on the dashboard.
-"""
+"""Analytics health: a dead-man's switch for the model, not just the camera."""
 from __future__ import annotations
 
 import statistics
@@ -18,7 +9,6 @@ from dataclasses import dataclass, field
 DEGRADED = "degraded"
 HEALTHY = "healthy"
 UNKNOWN = "unknown"
-
 
 @dataclass
 class AnalyticsHealthConfig:
@@ -32,7 +22,6 @@ class AnalyticsHealthConfig:
     drift_window: int = 60
     drift_high_ratio: float = 3.0
     drift_low_ratio: float = 0.33
-
 
 @dataclass
 class AnalyticsHealth:

@@ -5,7 +5,6 @@ import cv2
 
 from . import config
 
-
 def open_capture(source):
     """Open a source using the requested backend when OpenCV supports it."""
     requested = config.DECODER

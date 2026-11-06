@@ -9,7 +9,6 @@ import numpy as np
 
 from . import config
 
-
 class FrameHealth:
     """Small state machine that distinguishes an empty scene from bad input."""
 
@@ -75,7 +74,6 @@ class FrameHealth:
             "decode_failures": self.decode_failures,
             "quality": dict(self.quality),
         }
-
 
 def measure_quality(frame: np.ndarray) -> dict:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

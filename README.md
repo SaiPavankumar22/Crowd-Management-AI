@@ -1,12 +1,14 @@
 # Godavari Crowd Monitor
 
-**Real-time crowd counting, zone congestion and capacity alerting for ghats, temples,
-stations and mass gatherings — from any camera stream you already have.**
+## Problem statement
 
-Point it at a CCTV RTSP URL or a recorded clip. It detects every person with YOLO, tracks
-them across frames, counts them inside the zones you draw, turns those counts into
-occupancy and density, and raises an alert before a zone stops being safe — on a dashboard
-built to be watched in a control room.
+**Real-Time Crowd Monitoring and Congestion Management** — develop a technology-enabled
+solution to monitor crowd density and occupancy at key bathing ghats, access routes and
+public areas, identify congestion or overcrowding risks, and provide timely alerts and
+actionable information to the designated control teams.
+
+Godavari does that from CCTV / RTSP streams or recorded clips: person detection, zone
+occupancy, dense-crowd estimates, and control-room alerts on one dashboard.
 
 ![Live dashboard: collapsible sidebar, five camera views, areas and gate lines, KPIs](docs/dashboard.png)
 
@@ -18,6 +20,7 @@ built to be watched in a control room.
 
 ## Contents
 
+- [Problem statement](#problem-statement)
 - [What it does](#what-it-does)
 - [Tech stack](#tech-stack)
 - [Quick start](#quick-start)
@@ -85,7 +88,7 @@ bash backend/tools/install.sh       # creates ./.venv and installs pinned deps
 bash backend/tools/start_dev.sh     # serves http://127.0.0.1:8000
 ```
 
-`tools\start_dev.bat` does the same from Explorer. Then open **http://127.0.0.1:8000** and:
+`backend\tools\start_dev.bat` does the same from Explorer. Then open **http://127.0.0.1:8000** and:
 
 1. **+ Add** → choose *Sample* and pick a clip (the pilgrim library is under
    *Pilgrim*), or *Upload* your own `.mp4`, or *Source* and paste
@@ -187,18 +190,23 @@ and lets overlays stay full-resolution regardless of stream quality.
 A body detector counts bodies. In a packed crowd the people behind them are
 heads only, so the box count understates the crowd no matter how good the
 detector is. Two independent counting models therefore run beside it, from the
-Crowd Shield checkpoints in `models/`:
+Dense checkpoints in `models/` (not committed — large binaries):
 
 | Model | Checkpoint | What it adds |
 |---|---|---|
 | PET | `models/pet_shab.pth` | One point per visible head: count **and** locations, per area |
 | DM-Count | `models/dmcount_shab.pth` | A density map; the map sums to a count, integrated per area |
 
-The network definitions live in `backend/services/dense` (academic-use
-licence), and each load verifies the checkpoint's SHA-256 before use. The
-checkpoints themselves are not committed (large binaries, academic licence): drop
-them in `models/` or point `CROWD_MODELS_DIR` at them. Without them the service
-runs detector-only and the estimators report `available: false` with the reason.
+Place the files under `models/` (or set `CROWD_MODELS_DIR`), then enable:
+
+```bash
+CROWD_POINT_BACKEND=dense
+CROWD_DENSITY_BACKEND=dense
+```
+
+Network definitions live in `backend/services/dense` (academic-use licence). Each load
+verifies SHA-256. Without checkpoints the service runs detector-only and estimators
+report `available: false`.
 Both are **advisory**: the API reports `detector_count`, `head_point_count` and
 `density_count` side by side and `selected_count` stays `null` until a
 per-camera validation is signed off in the dashboard. They are never summed.
@@ -591,12 +599,11 @@ certified life-safety system.
 - **Density is relative, not metric.** `persons/10k px²` depends on camera geometry. A
   per-camera homography to metres would give real people/m², which is what the literature's
   safety bands (≈4–5 ppl/m² safe, > 6 ppl/m² flow collapse) are expressed in.
-- **Detector recall collapses in packed crowds** (see the measurements in
-  [docs/FOOTAGE.md](docs/FOOTAGE.md)). A head-point density model (P2PNet / DM-Count) used as
-  a cross-check, with routing "trust detection when sparse, density when dense", is the
-  intended next model addition.
-- **No frozen-frame detection yet.** A stalled camera reads as "no congestion", which is the
-  most dangerous failure mode for an alarm system; it is called out in the architecture doc.
+- **Detector recall collapses in packed crowds** (see [docs/FOOTAGE.md](docs/FOOTAGE.md)).
+  PET + DM-Count already run as advisory dense estimators; per-camera validation is still
+  required before treating them as operational counts.
+- **Frozen / stale cameras are marked degraded**, but operators must still treat a dark or
+  stalled feed as “unknown”, not “empty and safe”.
 - **No accounts or SSO.** Optional operator/viewer API tokens exist and HMAC-signed webhook
   delivery is proven end-to-end, but there are no users, sessions or SMS gateway.
 - **One machine per node.** Camera nodes publish signed summaries to a district node
@@ -610,9 +617,13 @@ certified life-safety system.
 ## Licensing
 
 - Application code in this repository: as you choose for your project.
-- **Ultralytics YOLO is AGPL-3.0.** Running it as a network service for third parties can
-  oblige you to publish the corresponding source. For internal use this is normally fine;
-  commercially, buy an Ultralytics licence or swap the detector.
+- **Ultralytics YOLO is AGPL-3.0.** Serving it as a network service for third parties can
+  oblige you to publish corresponding source. For internal demos this is normally fine;
+  commercially, buy an Ultralytics licence or swap to an Apache detector such as RT-DETR.
+- **PET / DM-Count service code** under `backend/services/dense` is academic-use oriented;
+  keep checkpoints local and validate claims before operational safety use.
+- Secrets (`MONGODB_URL`, API tokens, webhook secrets) belong only in `.env` (gitignored).
+  Rotate any credential that was ever shared outside the team.
 - Test footage: Creative Commons for four Archive.org clips (three CC BY 2.0, one CC BY-NC),
   evaluation-only for the YouTube clips. Per-clip licences in
   [docs/FOOTAGE.md](docs/FOOTAGE.md).

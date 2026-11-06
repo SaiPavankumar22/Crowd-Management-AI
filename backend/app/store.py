@@ -8,7 +8,6 @@ from . import config
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-
 def _db() -> sqlite3.Connection:
     global _conn
     if _conn is None:
@@ -34,7 +33,7 @@ def _db() -> sqlite3.Connection:
             cam_id TEXT NOT NULL, ts REAL NOT NULL, grid TEXT NOT NULL,
             PRIMARY KEY(cam_id, ts))""")
         # Durable alert outbox: an alert is persisted before it is delivered, so
-        # a restart or a long outage cannot lose it (improvement.md §3).
+        # a restart or a long outage cannot lose it.
         _conn.execute("""CREATE TABLE IF NOT EXISTS alert_outbox (
             id TEXT PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
             attempts INTEGER NOT NULL DEFAULT 0, created_ts REAL NOT NULL,
@@ -65,7 +64,6 @@ def _db() -> sqlite3.Connection:
         _conn.commit()
     return _conn
 
-
 def mongo_enqueue(op: str, collection: str, value) -> None:
     """Persist an idempotent Atlas mirror operation for eventual retry."""
     import json, time
@@ -75,7 +73,6 @@ def mongo_enqueue(op: str, collection: str, value) -> None:
         conn.execute("INSERT INTO mongo_outbox(op,collection_name,document_key,value,created_ts,next_attempt_ts) "
                      "VALUES(?,?,?,?,?,?)", (op, collection, doc_key, json.dumps(value), time.time(), time.time()))
         conn.commit()
-
 
 def mongo_due(now: float, limit: int = 20) -> list[dict]:
     import json
@@ -88,13 +85,11 @@ def mongo_due(now: float, limit: int = 20) -> list[dict]:
     return [{"id": r[0], "op": r[1], "collection": r[2], "value": json.loads(r[3]),
              "attempts": r[4]} for r in rows]
 
-
 def mongo_complete(row_id: int) -> None:
     with _lock:
         conn = _db()
         conn.execute("DELETE FROM mongo_outbox WHERE id=?", (row_id,))
         conn.commit()
-
 
 def mongo_retry(row_id: int, attempts: int, error: str, next_attempt_ts: float) -> None:
     with _lock:
@@ -103,11 +98,9 @@ def mongo_retry(row_id: int, attempts: int, error: str, next_attempt_ts: float) 
                      (attempts, error, next_attempt_ts, row_id))
         conn.commit()
 
-
 def mongo_pending() -> int:
     with _lock:
         return int(_db().execute("SELECT COUNT(*) FROM mongo_outbox").fetchone()[0])
-
 
 def get_alert(alert_id: str) -> dict | None:
     import json
@@ -126,7 +119,6 @@ def get_alert(alert_id: str) -> dict | None:
             "context": context, "ack_by": r[9], "ack_ts": r[10],
             "status": r[11], "closed_by": r[12], "closed_ts": r[13]}
 
-
 def add_alert(alert: dict):
     import json
     with _lock:
@@ -142,7 +134,6 @@ def add_alert(alert: dict):
     from .mongo_sync import mirror
     mirror.replace("alerts", {**alert, "status": alert.get("status", "open"),
                                 "_id": alert["id"]})
-
 
 def recent_alerts(limit: int = 100) -> list[dict]:
     import json
@@ -166,7 +157,6 @@ def recent_alerts(limit: int = 100) -> list[dict]:
                     "closed_ts": r[13]})
     return out
 
-
 def ack_alert(alert_id: str, by: str) -> None:
     with _lock:
         conn = _db()
@@ -174,7 +164,6 @@ def ack_alert(alert_id: str, by: str) -> None:
                      (by, __import__("time").time(), alert_id))
         conn.commit()
     _mirror_alert(alert_id)
-
 
 def close_alert(alert_id: str, by: str) -> bool:
     import time
@@ -188,7 +177,6 @@ def close_alert(alert_id: str, by: str) -> bool:
     if changed:
         _mirror_alert(alert_id)
     return changed
-
 
 def _mirror_alert(alert_id: str) -> None:
     import json
@@ -210,7 +198,6 @@ def _mirror_alert(alert_id: str) -> None:
                                    "status": row[11], "closed_by": row[12],
                                    "closed_ts": row[13]})
 
-
 def close_recovered_zone_alerts(cam_id: str, zone_id: str) -> int:
     """Auto-resolve active capacity alerts after zone occupancy recovers."""
     import time
@@ -230,8 +217,6 @@ def close_recovered_zone_alerts(cam_id: str, zone_id: str) -> int:
         _mirror_alert(alert_id)
     return changed
 
-
-# --------------------------------------------------------------------- outbox
 def outbox_enqueue(key: str, payload: dict, ts: float) -> bool:
     """Insert once per idempotency key; duplicates are ignored."""
     import json
@@ -246,7 +231,6 @@ def outbox_enqueue(key: str, payload: dict, ts: float) -> bool:
         conn.commit()
         return cursor.rowcount > 0
 
-
 def outbox_due(now: float, limit: int = 20) -> list[dict]:
     import json
     with _lock:
@@ -256,7 +240,6 @@ def outbox_due(now: float, limit: int = 20) -> list[dict]:
             "ORDER BY next_attempt_ts LIMIT ?", (now, max(1, limit))
         ).fetchall()
     return [{"id": r[0], "payload": json.loads(r[1]), "attempts": r[2]} for r in rows]
-
 
 def outbox_mark(key: str, state: str, attempts: int, error: str | None,
                 next_attempt_ts: float | None) -> None:
@@ -270,7 +253,6 @@ def outbox_mark(key: str, state: str, attempts: int, error: str | None,
              time.time() if state == "delivered" else None, key),
         )
         conn.commit()
-
 
 def outbox_ack(key: str, by: str) -> dict | None:
     import time
@@ -286,14 +268,12 @@ def outbox_ack(key: str, by: str) -> dict | None:
         conn.commit()
     return {"id": row[0], "state": row[1], "attempts": row[2], "acked_by": by}
 
-
 def outbox_escalate(key: str) -> bool:
     with _lock:
         conn = _db()
         cursor = conn.execute("UPDATE alert_outbox SET escalated=1 WHERE id=?", (key,))
         conn.commit()
         return cursor.rowcount > 0
-
 
 def outbox_stats() -> dict:
     with _lock:
@@ -313,8 +293,6 @@ def outbox_stats() -> dict:
             "failed": failed, "acked": acked,
             "oldest_pending_ts": oldest}
 
-
-# ---------------------------------------------------------------------- audit
 def add_audit(action: str, actor: str = "system", target: str | None = None,
               detail: dict | None = None) -> None:
     import json
@@ -336,7 +314,6 @@ def add_audit(action: str, actor: str = "system", target: str | None = None,
                                     "action": action, "target": target,
                                     "detail": detail or {}})
 
-
 def recent_audit(limit: int = 100) -> list[dict]:
     import json
     with _lock:
@@ -345,7 +322,6 @@ def recent_audit(limit: int = 100) -> list[dict]:
             "ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
     return [{"ts": r[0], "actor": r[1], "action": r[2], "target": r[3],
              "detail": json.loads(r[4] or "{}")} for r in rows]
-
 
 def add_sample(cam_id: str, ts: float, count: int, occupancy, zones: list,
                lines: list | None = None, transitions: list | None = None):
@@ -364,7 +340,6 @@ def add_sample(cam_id: str, ts: float, count: int, occupancy, zones: list,
                                 "zones": zones, "lines": lines or [],
                                 "transitions": transitions or []})
 
-
 def history(since: float, cam_id: str | None = None) -> list[dict]:
     import json
     with _lock:
@@ -374,7 +349,6 @@ def history(since: float, cam_id: str | None = None) -> list[dict]:
         else:
             rows = conn.execute("SELECT cam_id,ts,count,occupancy,zones,lines,transitions FROM samples WHERE ts>=? ORDER BY ts", (since,)).fetchall()
     return [{"cam_id": r[0], "ts": r[1], "count": r[2], "occupancy": r[3], "zones": json.loads(r[4]), "lines": json.loads(r[5]), "transitions": json.loads(r[6])} for r in rows]
-
 
 def add_heatmap(cam_id: str, ts: float, grid: dict):
     import json
@@ -386,7 +360,6 @@ def add_heatmap(cam_id: str, ts: float, grid: dict):
     from .mongo_sync import mirror
     mirror.replace("heatmaps", {"_id": f"{cam_id}:{ts:.6f}", "cam_id": cam_id,
                                 "ts": ts, "grid": grid})
-
 
 def heatmap_history(since: float, cam_id: str, limit: int = 500) -> list[dict]:
     import json

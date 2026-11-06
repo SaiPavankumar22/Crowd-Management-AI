@@ -84,7 +84,6 @@ async def health_endpoint():
 async def prometheus_metrics():
     return Response(metrics.render(), media_type="text/plain; version=0.0.4")
 
-
 @router.get("/api/analytics/health")
 async def analytics_health():
     """Model-side health: no-inference, count collapse and drift per camera."""

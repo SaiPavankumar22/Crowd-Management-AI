@@ -23,7 +23,6 @@ MONGODB_URL = os.environ.get("MONGODB_URL", "").strip()
 MONGODB_DB_NAME = os.environ.get("MONGODB_DB_NAME", "godavari").strip() or "godavari"
 MAX_UPLOAD_BYTES = max(1, int(os.environ.get("CROWD_MAX_UPLOAD_BYTES", str(1024 ** 3))))
 
-
 def resolve_media(path: str) -> str:
     """Return a usable local path for a stored camera source.
 
@@ -43,13 +42,11 @@ def resolve_media(path: str) -> str:
             return candidate
     return path
 
-
 def env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off")
-
 
 # --- Model -----------------------------------------------------------------
 # YOLO26-nano (Ultralytics, released Jan 2026): NMS-free end-to-end head,
@@ -102,8 +99,7 @@ BATCH_SIZE = int(os.environ.get("CROWD_BATCH_SIZE", "1"))
 MAX_BATCH_WAIT_MS = float(os.environ.get("CROWD_MAX_BATCH_WAIT_MS", "8"))
 FRAME_QUEUE_SIZE = int(os.environ.get("CROWD_FRAME_QUEUE_SIZE", "2"))
 DECODER = os.environ.get("CROWD_DECODER", "auto").lower()
-# Stale results are worse than dropped frames: anything older than this is
-# discarded rather than analysed (improvement.md §8).
+# Stale results are worse than dropped frames: drop anything older than this.
 MAX_FRAME_AGE_MS = float(os.environ.get("CROWD_MAX_FRAME_AGE_MS", "500"))
 
 # --- Tiled inference (gated: only when people are small in frame) ----------
@@ -170,7 +166,7 @@ WEBHOOK_SECRET = os.environ.get("ALERT_WEBHOOK_SECRET", "").strip()
 WEBHOOK_TIMEOUT_S = float(os.environ.get("ALERT_WEBHOOK_TIMEOUT_S", "5"))
 WEBHOOK_RETRIES = int(os.environ.get("ALERT_WEBHOOK_RETRIES", "3"))
 
-# --- Edge -> district (plan §8) -------------------------------------------
+# --- Edge -> district (plan
 # Empty push URL keeps a node standalone; a district node only needs the secret.
 DISTRICT_NODE_ID = os.environ.get("CROWD_DISTRICT_NODE_ID", "").strip()
 DISTRICT_PUSH_URL = os.environ.get("CROWD_DISTRICT_PUSH_URL", "").strip()

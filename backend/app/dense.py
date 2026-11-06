@@ -1,13 +1,4 @@
-"""PET and DM-Count wrappers pinned to checkpoints in ``models/``.
-
-Network definitions live under ``backend/services/dense``. This module owns
-deployment concerns: which checkpoint is loaded, checksum verification, the
-optional count correction, and the device.
-
-Neither model becomes an operational count on its own. Adapters wrap these
-calls in advisory contracts and the router keeps them unselected until a
-per-camera validation is signed off.
-"""
+"""PET and DM-Count wrappers pinned to checkpoints in ``models/``."""
 from __future__ import annotations
 
 import hashlib
@@ -41,7 +32,6 @@ _lock = threading.Lock()
 _loaded: dict[str, object] = {}
 _hashes: dict[str, str] = {}
 
-
 def _services():
     """Import the dense service package without making it a hard startup dependency."""
     if str(_BACKEND_DIR) not in sys.path:
@@ -51,14 +41,12 @@ def _services():
 
     return dense_points, dense_density
 
-
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
 
 def verify(path: Path, expected: str) -> Path:
     """Fail early when a checkpoint is missing, truncated or simply another file."""
@@ -74,12 +62,10 @@ def verify(path: Path, expected: str) -> Path:
     _hashes[path.name] = actual
     return path
 
-
 def _torch_device() -> str:
     import torch
 
     return "cuda" if torch.cuda.is_available() else "cpu"
-
 
 def _pet():
     with _lock:
@@ -92,7 +78,6 @@ def _pet():
             _loaded["pet"] = dense_points.load_point_model()
         return _loaded["pet"]
 
-
 def _dmcount():
     with _lock:
         if "dmcount" not in _loaded:
@@ -100,7 +85,6 @@ def _dmcount():
             dense_density.DEFAULT_WEIGHTS = verify(DMCOUNT_WEIGHTS, DMCOUNT_SHA256)
             _loaded["dmcount"] = dense_density.load_density_model(str(DMCOUNT_WEIGHTS))
         return _loaded["dmcount"]
-
 
 def count_points(frame_bgr: np.ndarray) -> dict:
     """Head points for one BGR frame.
@@ -121,7 +105,6 @@ def count_points(frame_bgr: np.ndarray) -> dict:
     return {"count": float(count) if count is not None else float(raw),
             "raw_count": raw, "points": points}
 
-
 def estimate_density(frame_bgr: np.ndarray) -> dict:
     """Density map for one BGR frame: ``{"count", "density", "scale"}``.
 
@@ -131,7 +114,6 @@ def estimate_density(frame_bgr: np.ndarray) -> dict:
     _, dense_density = _services()
     _dmcount()
     return dense_density.estimate_density(frame_bgr, weights=str(DMCOUNT_WEIGHTS))
-
 
 def info() -> dict:
     """What is installed, for /api/system and for the operator audit trail."""
@@ -154,7 +136,6 @@ def info() -> dict:
             "loaded": "dmcount" in _loaded,
         },
     }
-
 
 def available() -> tuple[bool, str | None]:
     """Whether both checkpoints and the service definitions can be used."""

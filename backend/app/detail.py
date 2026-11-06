@@ -1,35 +1,4 @@
-"""Two-tier detail escalation for scenes the detector cannot resolve.
-
-A box detector collapses when people are only ~12 px tall. On the packed-ghat
-clip the default pass (imgsz 640, full frame) returns **0.3 people** for a scene
-containing hundreds, and nothing in the result says the detector failed: an
-empty road produces the same output. That is worse than a wrong number, because
-the dashboard certifies it as a trusted count.
-
-Two image-statistics triggers were measured and rejected before this design:
-
-* edge density — measured 0.42-0.89 on every sample clip; it responds to scene
-  texture (foliage, road markings, compression noise), not to people;
-* temporal motion — measured ~0.000 on the packed-ghat clips, which are
-  near-static shots of a standing crowd.
-
-Both would have needed per-site calibration against negatives we do not have.
-This module instead uses **detection against detection**, which needs none:
-
-1. run the normal (optionally gated-tiled) full-frame pass;
-2. if it found almost nobody, re-run the same frame as a 2x2 tile probe
-   (cheap: ~15 ms at 640);
-3. only if that probe disagrees strongly, run the expensive 3x3 detail pass at
-   high resolution (~58 ms at 1280).
-
-Measured on `gettyimages-683716020-640_adpp.mp4`: full frame **0.3**, 2x2 probe
-**4.4**, 3x3 @1280 **135.4**. An empty scene never pays for step 3, and idle
-cameras back off from even step 2 after repeated empty probes.
-
-The escalated result is not a true count either: 135 is a *lower bound* for a
-scene with hundreds. That is why the mode router degrades it and the UI labels
-it `>=` rather than presenting it as fact.
-"""
+"""Two-tier detail escalation for scenes the detector cannot resolve."""
 from __future__ import annotations
 
 import threading
@@ -41,7 +10,6 @@ from . import metrics
 from .adapters import (DetectionResult, DetectorAdapter, ModelSpec,
                        merge_tiled)
 from .tiling import TilingPolicy, compute_tiles, crop
-
 
 class DetailPass(DetectorAdapter):
     """Escalating wrapper around one loaded model.
@@ -228,7 +196,6 @@ class DetailPass(DetectorAdapter):
     def detect(self, frame: np.ndarray,
                camera_id: str | None = None) -> DetectionResult:
         return self.detect_batch([frame], camera_ids=[camera_id])[0]
-
 
 def _as_detail(result: DetectionResult, primary_count: int) -> DetectionResult:
     """Re-label an escalated result so the router and UI can reason about it."""

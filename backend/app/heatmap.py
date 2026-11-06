@@ -1,23 +1,7 @@
-"""Crowd density heatmap: an exponentially-decaying occupancy grid.
-
-Every detected person's foot point is splatted with a small Gaussian kernel
-into a low-resolution grid. The grid decays on each inference tick, so it
-visualises where people *accumulate over time* -- choke points, queue lanes,
-standing areas -- rather than a single frame's boxes.
-
-Encoding notes
---------------
-* 48 x 27 cells keeps the payload tiny (1296 bytes -> ~1.7 KB base64) while
-  still looking smooth once the dashboard upscales it bilinearly + blurs.
-* The grid is normalised against a slowly-decaying running peak, so a quiet
-  scene still shows faint structure instead of everything reading "max".
-* Pure NumPy, no OpenCV: this runs inside the per-camera worker at the
-  inference rate, so it must stay cheap.
-"""
+"""Crowd density heatmap: an exponentially-decaying occupancy grid."""
 import base64
 
 import numpy as np
-
 
 class HeatmapAccumulator:
     """Decaying occupancy grid fed by normalised foot points (x, y in 0..1)."""

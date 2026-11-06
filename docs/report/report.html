@@ -107,8 +107,9 @@
 <section class="page cover">
   <div class="badge">Hackathon submission · technical report</div>
   <h1 style="margin-top:9mm">Godavari<br>Crowd Monitor</h1>
-  <div class="sub">Real-time crowd counting, zone congestion and capacity alerting
-  for mass gatherings — one service, no cloud, measured on real footage.</div>
+  <div class="sub">Real-Time Crowd Monitoring and Congestion Management — density and
+  occupancy at bathing ghats, access routes and public areas, with timely alerts for
+  control teams. One service, no cloud, measured on real footage.</div>
 
   <div class="metric-strip">
     <div class="metric">
@@ -223,8 +224,8 @@
     <div class="arrow">▼</div>
     <div class="flow-row">
       <div class="node"><b>Track</b>ByteTrack IDs — a person is not counted twice</div>
-      <div class="node"><b>Measure</b>foot point → polygon zones → count, occupancy %, density</div>
-      <div class="node"><b>Derive</b>flow vector + speed, 48×27 decaying heatmap</div>
+      <div class="node"><b>Dense</b>PET head points + DM-Count maps (advisory until validated)</div>
+      <div class="node"><b>Measure</b>foot point → zones → occupancy %, density, flow, heatmap</div>
     </div>
     <div class="arrow">▼</div>
     <div class="flow-row">
@@ -296,6 +297,7 @@
     <tr><th style="width:22%">Layer</th><th style="width:30%">Technology</th><th style="width:13%">Version</th><th>Why this one</th></tr>
     <tr><td>Language</td><td>Python</td><td>3.11 / 3.12</td><td>Native home of the vision and ML ecosystem; one language from ingest to API.</td></tr>
     <tr><td>Detection</td><td>Ultralytics YOLO26n <small>(YOLO11n / YOLOv8n fallback)</small></td><td>8.4.120</td><td>NMS-free, strong on small/dense objects, ~10 ms on GPU; nano variant keeps CPU viable.</td></tr>
+    <tr><td>Dense counting</td><td>PET + DM-Count under <code>backend/services/dense</code></td><td>advisory</td><td>Head points and density maps for packed scenes; remain estimates until camera validation.</td></tr>
     <tr><td>Tracking</td><td>ByteTrack via <code>supervision</code></td><td>0.18.0</td><td>Identity persistence for distinct-people counts; pinned because ≥0.24 removed <code>sv.ByteTrack</code>.</td></tr>
     <tr><td>Vision</td><td>OpenCV</td><td>5.0.0.93</td><td>Decode, resize, annotate, JPEG encode. Standard wheel + <code>libgl1</code>, because the 5.0 headless wheel ships no <code>cv2</code>.</td></tr>
     <tr><td>Numerics</td><td>PyTorch (+ torchvision)</td><td>2.11 CUDA 12.8 / 2.15 CPU</td><td>CUDA 12.8 is the first build with Blackwell (sm_120) kernels; cu121 silently fails there.</td></tr>
@@ -311,7 +313,7 @@
       <h3>Deployment shapes verified</h3>
       <table>
         <tr><th>Environment</th><th>Build</th><th class="num">Size</th></tr>
-        <tr><td>Windows dev</td><td><code>tools/install.sh</code> → <code>.venv</code></td><td class="num">7.5 GB</td></tr>
+        <tr><td>Windows dev</td><td><code>backend/tools/install.sh</code> → <code>.venv</code></td><td class="num">7.5 GB</td></tr>
         <tr><td>Any host, CPU</td><td><code>docker build -t godavari:cpu .</code></td><td class="num">0.67 GB</td></tr>
         <tr><td>GPU host</td><td><code>--build-arg TORCH_INDEX_URL=…/cu128</code></td><td class="num">4.4 GB</td></tr>
         <tr><td>Ubuntu 24.04 VM</td><td>venv + cu128 wheels</td><td class="num">7.5 GB</td></tr>
@@ -628,7 +630,7 @@
         <code>ack_by=operator</code> with an audit entry.</li>
         <li><span class="check">✓</span> 69 unit tests covering router decisions (including
         dense consensus), detail escalation, tiling, zones, alerts, health, calibration, the
-        Crowd Shield adapters and the API.</li>
+        dense PET/DM-Count adapters and the API.</li>
       </ul>
 
       <h3 style="margin-top:3.5mm">Deployment</h3>
@@ -699,9 +701,9 @@
   <div class="grid2">
     <div class="card" style="border-left-color:#f59e0b">
       <h4>One-liner</h4>
-      <p style="font-size:9.2pt; color:#0f172a; line-height:1.5"><b>Godavari turns any camera
-      into a zone-aware crowd sensor: it measures occupancy against the capacity you declare,
-      and shouts only when a zone stays over that line.</b></p>
+      <p style="font-size:9.2pt; color:#0f172a; line-height:1.5"><b>Real-Time Crowd Monitoring
+      and Congestion Management for bathing ghats, access routes and public areas — occupancy,
+      dense estimates and timely alerts for designated control teams.</b></p>
     </div>
     <div class="card">
       <h4>Thirty-second pitch</h4>

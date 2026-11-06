@@ -1,10 +1,4 @@
-"""Detector and density adapter boundaries.
-
-`improvement.md` §"Create a detector adapter interface": the camera pipeline
-must depend on `DetectionResult`, not on Ultralytics objects, so that models can
-be benchmarked, licensed and swapped without rewriting tracking, zones or
-alerts. Every backend therefore returns the same frozen dataclass.
-"""
+"""Detector and density adapter boundaries."""
 from __future__ import annotations
 
 import abc
@@ -24,10 +18,7 @@ from .tiling import (TilingPolicy, compute_tiles, crop, merge_tile_results,
 
 PERSON_CLASS = 0
 
-
-# --------------------------------------------------------------------------- #
 # Result types
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class DetectionResult:
     """The only thing the pipeline is allowed to know about a detector."""
@@ -72,7 +63,6 @@ class DetectionResult:
             "tiles": self.tile_count,
         }
 
-
 @dataclass(frozen=True)
 class DensityResult:
     """Advisory density estimate. Never merged into the detector count."""
@@ -83,7 +73,6 @@ class DensityResult:
     model_name: str
     model_version: str
     density_map: np.ndarray | None = None
-
 
 @dataclass(frozen=True)
 class PointResult:
@@ -107,10 +96,7 @@ class PointResult:
         return (float(self.corrected_count) if self.corrected_count is not None
                 else float(self.raw_count))
 
-
-# --------------------------------------------------------------------------- #
 # Model metadata / licence registry
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class ModelSpec:
     name: str
@@ -139,7 +125,6 @@ class ModelSpec:
             "notes": self.notes,
             "requires": self.requires,
         }
-
 
 # Licence terms checked before deployment, not assumed: Ultralytics (YOLOv8,
 # YOLO11, YOLO26) ships AGPL-3.0; RF-DETR Nano-Small-Large weights are
@@ -189,7 +174,6 @@ KNOWN_MODELS: dict[str, ModelSpec] = {
                                  notes="D-FINE large; needs the `dfine` package"),
 }
 
-
 def _weight_path(name: str) -> str:
     """Prefer the organized local model directory while preserving model IDs.
 
@@ -199,7 +183,6 @@ def _weight_path(name: str) -> str:
     """
     candidate = Path(config.MODELS_DIR) / Path(name).name
     return str(candidate) if candidate.is_file() else name
-
 
 def model_available(name: str) -> bool:
     """True when this model's backend dependencies are importable.
@@ -216,7 +199,6 @@ def model_available(name: str) -> bool:
     except (ImportError, ValueError):
         return False
 
-
 def spec_for(name: str, imgsz: int | None = None) -> ModelSpec:
     spec = KNOWN_MODELS.get(name)
     if spec is None:
@@ -230,10 +212,7 @@ def spec_for(name: str, imgsz: int | None = None) -> ModelSpec:
                          spec.commercial_use, spec.notes, spec.requires)
     return spec
 
-
-# --------------------------------------------------------------------------- #
 # Detector adapters
-# --------------------------------------------------------------------------- #
 class DetectorAdapter(abc.ABC):
     """Common surface for every detector backend."""
 
@@ -254,7 +233,6 @@ class DetectorAdapter(abc.ABC):
 
     @abc.abstractmethod
     def info(self) -> dict: ...
-
 
 class UltralyticsDetector(DetectorAdapter):
     """YOLO-family adapter, also used for Ultralytics-exported .onnx weights."""
@@ -358,7 +336,6 @@ class RTDETRDetector(UltralyticsDetector):
             self._model = RTDETR(_weight_path(self.name))
         return self
 
-
 _RFDETR_CLASSES = {
     "nano": "RFDETRNano",
     "small": "RFDETRSmall",
@@ -367,7 +344,6 @@ _RFDETR_CLASSES = {
     "large": "RFDETRLarge",
     "2xlarge": "RFDETR2XLarge",
 }
-
 
 def _convert_detections(det, frame: np.ndarray, per_frame_ms: float,
                         name: str, version: str) -> DetectionResult:
@@ -387,7 +363,6 @@ def _convert_detections(det, frame: np.ndarray, per_frame_ms: float,
     h, w = frame.shape[:2]
     return DetectionResult(boxes[keep], confs[keep], classes[keep], per_frame_ms,
                            name, version, (w, h))
-
 
 class RFDetrDetector(DetectorAdapter):
     """RF-DETR (Roboflow, Apache-2.0) through the optional ``rfdetr`` package.
@@ -469,7 +444,6 @@ class RFDetrDetector(DetectorAdapter):
                      "detector": "rfdetr"})
         return base
 
-
 class DFineDetector(DetectorAdapter):
     """D-FINE (Apache-2.0) through the optional ``dfine`` package.
 
@@ -547,7 +521,6 @@ class DFineDetector(DetectorAdapter):
                      "detector": "dfine"})
         return base
 
-
 def build_detector(name: str, conf: float = 0.30, imgsz: int = 640,
                    device=None, half: bool = False) -> DetectorAdapter:
     """Pick the adapter class for a registered model name.
@@ -563,7 +536,6 @@ def build_detector(name: str, conf: float = 0.30, imgsz: int = 640,
     if spec.backend == "dfine":
         return DFineDetector(name, conf=conf, imgsz=imgsz, device=device, half=half)
     return UltralyticsDetector(name, conf=conf, imgsz=imgsz, device=device, half=half)
-
 
 def merge_tiled(tile_results: list[DetectionResult], tile_rects: list,
                 frame: np.ndarray, spec: ModelSpec, elapsed_ms: float,
@@ -588,7 +560,6 @@ def merge_tiled(tile_results: list[DetectionResult], tile_rects: list,
         tiled=True, tile_count=len(tile_rects), tier=tier,
         primary_count=primary_count,
     )
-
 
 class TiledDetector(DetectorAdapter):
     """Wraps an adapter with gated tiled inference and cross-tile NMS.
@@ -637,10 +608,7 @@ class TiledDetector(DetectorAdapter):
                      ) -> list[DetectionResult]:
         return [self.detect(frame) for frame in frames]
 
-
-# --------------------------------------------------------------------------- #
-# Density adapter (advisory only, per improvement.md)
-# --------------------------------------------------------------------------- #
+# Density adapter (advisory only until camera validation)
 class DensityEstimator(abc.ABC):
     """Density/point-count adapter. Output is advisory, never operational."""
 
@@ -654,7 +622,6 @@ class DensityEstimator(abc.ABC):
     def info(self) -> dict:
         return {"name": self.name, "version": self.version,
                 "validated": self.validated, "available": True}
-
 
 class PointEstimator(abc.ABC):
     """Head-point estimation boundary used by dense-scene routing."""
@@ -670,7 +637,6 @@ class PointEstimator(abc.ABC):
         return {"name": self.name, "version": self.version,
                 "validated": self.validated, "available": True}
 
-
 class NullPointEstimator(PointEstimator):
     """An explicit unavailable state; absence must never resemble zero heads."""
 
@@ -685,7 +651,6 @@ class NullPointEstimator(PointEstimator):
         return {"name": self.name, "version": self.version, "validated": False,
                 "available": False,
                 "note": "Set CROWD_POINT_BACKEND=dense after installing dense checkpoints"}
-
 
 def _point_zone_counts(points: np.ndarray, zone_masks: list | None,
                        frame_shape: tuple[int, int]) -> dict:
@@ -708,7 +673,6 @@ def _point_zone_counts(points: np.ndarray, zone_masks: list | None,
             for x, y in points
         )
     return counts
-
 
 class DensePointEstimator(PointEstimator):
     """Adapter for the dense PET ``count_points`` service.
@@ -757,7 +721,6 @@ class DensePointEstimator(PointEstimator):
             model_name=self.name, model_version=self.version,
         )
 
-
 class DenseDensityEstimator(DensityEstimator):
     """Adapter for the dense DM-Count service."""
 
@@ -790,7 +753,6 @@ class DenseDensityEstimator(DensityEstimator):
             density_map=density_map,
         )
 
-
 class NullDensityEstimator(DensityEstimator):
     """Explicit "no density model installed" state.
 
@@ -809,7 +771,6 @@ class NullDensityEstimator(DensityEstimator):
         return {"name": self.name, "version": self.version, "validated": False,
                 "available": False,
                 "note": "Set CROWD_DENSITY_BACKEND=dense with models/dmcount_shab.pth"}
-
 
 def _density_zone_counts(density_map: np.ndarray | None,
                          zone_masks: list | None) -> dict:
@@ -836,7 +797,6 @@ def _density_zone_counts(density_map: np.ndarray | None,
         cv2.fillPoly(mask, [polygon.astype(np.int32)], 1)
         counts[key] = float(density_map[mask.astype(bool)].sum())
     return counts
-
 
 class TorchscriptDensityEstimator(DensityEstimator):
     """DM-Count-style density adapter for an operator-supplied TorchScript model.

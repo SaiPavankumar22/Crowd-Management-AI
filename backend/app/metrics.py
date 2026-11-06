@@ -1,9 +1,4 @@
-"""Dependency-free Prometheus metrics, with labels.
-
-Labels matter for the observability requirement in `improvement.md`: a count
-without knowing *which camera, which ghat and which model version* produced it
-cannot be audited after an event.
-"""
+"""Dependency-free Prometheus metrics, with labels."""
 from __future__ import annotations
 
 import threading
@@ -14,7 +9,6 @@ _counters = defaultdict(float)
 _gauges = defaultdict(float)
 _types: dict[str, str] = {}
 
-
 def _key(name: str, labels: dict | None) -> str:
     if not labels:
         return name
@@ -23,20 +17,17 @@ def _key(name: str, labels: dict | None) -> str:
     )
     return f"{name}{{{rendered}}}"
 
-
 def inc(name: str, value: float = 1.0, labels: dict | None = None):
     key = _key(name, labels)
     with _lock:
         _counters[key] += value
         _types.setdefault(key, "counter")
 
-
 def set_gauge(name: str, value: float, labels: dict | None = None):
     key = _key(name, labels)
     with _lock:
         _gauges[key] = value
         _types.setdefault(key, "gauge")
-
 
 def render() -> str:
     lines = []

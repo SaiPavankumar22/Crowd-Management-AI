@@ -9,14 +9,11 @@ from . import config
 
 _upload_lock = threading.Lock()
 
-
 class UploadTooLarge(ValueError):
     pass
 
-
 def _valid_video_name(name: str) -> bool:
     return os.path.splitext(name)[1].lower() in config.VIDEO_EXTS
-
 
 def save_upload(upload: UploadFile) -> str:
     if not upload.filename or not _valid_video_name(upload.filename):
@@ -43,7 +40,6 @@ def save_upload(upload: UploadFile) -> str:
         raise
     return path
 
-
 def list_samples() -> list[str]:
     """Bundled clips, including one level of subfolders (e.g. pilgrim/).
 
@@ -60,7 +56,6 @@ def list_samples() -> list[str]:
                 if sub.is_file() and _valid_video_name(sub.name):
                     found.append(f"{entry.name}/{sub.name}")
     return sorted(found)
-
 
 def sample_path(name: str) -> str:
     # Reject traversal: the resolved file must stay inside SAMPLES_DIR.

@@ -21,7 +21,6 @@ def level_for(occupancy_pct: float, warn_pct: float = 75.0) -> str:
         return "BUSY"
     return "OK"
 
-
 class Zone:
     def __init__(self, name: str, polygon, capacity: int = 100,
                  warn_pct: float = 75.0, zone_id: str | None = None):
@@ -74,7 +73,6 @@ class Zone:
         }
         return d
 
-
 def validate_polygon(polygon) -> list:
     if not isinstance(polygon, list) or len(polygon) < 3:
         raise ValueError("polygon needs at least 3 [x, y] points")
@@ -87,7 +85,6 @@ def validate_polygon(polygon) -> list:
             raise ValueError("polygon coordinates must be normalized 0..1")
         pts.append([x, y])
     return pts
-
 
 def clean_zone_dict(d: dict, warn_pct_default: float = 75.0) -> dict:
     if not isinstance(d, dict) or not d.get("name"):

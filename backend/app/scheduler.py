@@ -1,19 +1,4 @@
-"""Fair, bounded inference scheduler with per-camera latest-frame slots.
-
-Two problems with a single shared FIFO (`improvement.md` §8):
-
-1. When the queue is full the old code ran inference inline on the camera
-   thread, which removes serialisation exactly when the GPU is already the
-   bottleneck.
-2. One camera producing frames faster than the model can consume them fills the
-   queue and starves every other camera.
-
-This scheduler keeps **one pending request per camera**. A newer frame from the
-same camera replaces the older one (drop-oldest), cameras are dispatched
-round-robin, frames older than `CROWD_MAX_FRAME_AGE_MS` are discarded as stale
-instead of being analysed, and nothing ever calls the model outside the
-dispatcher thread.
-"""
+"""Fair, bounded inference scheduler with per-camera latest-frame slots."""
 from __future__ import annotations
 
 import threading
@@ -22,14 +7,11 @@ from collections import deque
 
 from . import config, metrics
 
-
 class InferenceTimeout(RuntimeError):
     """The scheduler did not answer in time; drop the frame, keep the feed."""
 
-
 class StaleFrameError(RuntimeError):
     """The frame aged out before inference; analysing it would be misleading."""
-
 
 class _Request:
     __slots__ = ("camera_id", "frame", "created", "done", "result", "error")
@@ -41,7 +23,6 @@ class _Request:
         self.done = threading.Event()
         self.result = None
         self.error = None
-
 
 class InferenceScheduler:
     def __init__(self, model, batch_size: int | None = None,

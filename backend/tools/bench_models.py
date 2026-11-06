@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
 """Offline model/tiling benchmark on real clips.
 
-This is the executable part of `improvement.md` §"Evaluation plan": same clips,
-same frames, every candidate through the real adapter boundary, reporting the
-operational numbers the plan asks for (count, latency, end-to-end FPS, VRAM)
-instead of a headline COCO score.
-
-    python tools/bench_models.py --clips samples/a.mp4 samples/b.mp4 \
+    python backend/tools/bench_models.py --clips samples/a.mp4 \
         --models yolo26n.pt --tiling off,2x2,3x3 --frames 60
-
-Counts are what the detector returned, not ground truth: add manually counted
-values with --manual to get absolute error.
 """
 from __future__ import annotations
 

@@ -1,16 +1,4 @@
-"""Edge -> district aggregation (plan §8).
-
-Each camera node keeps running the pipeline locally. When
-`CROWD_DISTRICT_PUSH_URL` is set it posts a signed summary of its cameras and
-alerts on a fixed period; a district node accepts those summaries on
-`/api/district/ingest` and serves the merged picture on
-`/api/district/overview`.
-
-There is no central tier: one district node is the ceiling of what this
-repository runs, and nothing here is required for single-node operation — with
-no push URL the thread never starts and ingest answers 503 until a shared
-secret exists.
-"""
+"""Edge -> district aggregation (plan Each camera node keeps running the pipeline locally."""
 from __future__ import annotations
 
 import hashlib
@@ -30,18 +18,14 @@ router = APIRouter(tags=["district"])
 _lock = threading.Lock()
 _nodes: dict[str, dict] = {}
 
-
 def _signature(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-
 
 def _authorised(body: bytes, signature: str) -> bool:
     if not config.DISTRICT_SECRET:
         return False
     return hmac.compare_digest(_signature(body, config.DISTRICT_SECRET), signature or "")
 
-
-# ------------------------------------------------------------------ ingest
 @router.post("/api/district/ingest")
 async def ingest(request: Request):
     """Accept one node snapshot. Signed with the district's shared secret."""
@@ -61,7 +45,6 @@ async def ingest(request: Request):
         _nodes[node] = {**payload, "node": node, "received_ts": time.time()}
     metrics.inc("godavari_district_ingest_total")
     return {"ok": True, "node": node, "nodes": len(_nodes)}
-
 
 @router.get("/api/district/overview")
 async def overview():
@@ -99,8 +82,6 @@ async def overview():
         "node_ttl_s": ttl,
     }
 
-
-# ----------------------------------------------------------------- publish
 def summary() -> dict:
     """The payload this node publishes to its district."""
     cameras = []
@@ -121,7 +102,6 @@ def summary() -> dict:
     return {"node": config.DISTRICT_NODE_ID, "ts": time.time(),
             "device": model.info().get("device"), "cameras": cameras,
             "alerts": alerts}
-
 
 class DistrictPublisher(threading.Thread):
     """Push this node's summary to the district on a fixed period."""
@@ -159,6 +139,5 @@ class DistrictPublisher(threading.Thread):
             if not 200 <= response.status < 300:
                 raise RuntimeError(f"district returned HTTP {response.status}")
         metrics.inc("godavari_district_push_total")
-
 
 publisher = DistrictPublisher()

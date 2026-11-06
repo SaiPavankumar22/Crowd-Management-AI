@@ -8,7 +8,6 @@ _SOURCE_CREDENTIALS = re.compile(
     r"(?i)\b((?:rtsp|rtsps|http|https)://)[^/@\s]+@"
 )
 
-
 def redact_source_credentials(value):
     """Recursively replace embedded auth in supported stream URLs."""
     if isinstance(value, str):
@@ -20,7 +19,6 @@ def redact_source_credentials(value):
     if isinstance(value, tuple):
         return tuple(redact_source_credentials(item) for item in value)
     return value
-
 
 def source_display_name(source: str) -> str:
     """Create a useful source label without persisting auth, path, or query."""

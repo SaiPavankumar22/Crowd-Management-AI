@@ -1,9 +1,4 @@
-"""Tests for the improvement.md architecture pieces.
-
-Covers the mode router's degradation contract, tiled-inference merging, the
-analytics dead-man switch, outbox durability/idempotency and the scheduler's
-fairness and staleness rules.
-"""
+"""Architecture tests: router, tiling, analytics health, outbox, scheduler."""
 import os
 import tempfile
 import threading

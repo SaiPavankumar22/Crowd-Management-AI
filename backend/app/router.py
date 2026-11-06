@@ -1,22 +1,4 @@
-"""Confidence and mode router.
-
-`improvement.md` §"Mode router": detector boxes are trustworthy only while
-people are separable. When they are not, the system must say so out loud
-(`ANALYTICS_DEGRADED`) and keep the density estimate advisory rather than
-silently blending two numbers into a confident-looking crowd count.
-
-Rules implemented here:
-
-* SPARSE / MODERATE  -> detector + tracker is the operational count.
-* DENSE              -> tracking is marked unreliable, density is shown
-                        separately, `selected_count` is null pending review.
-* UNKNOWN            -> camera quality or model confidence is insufficient.
-
-Mode changes use hysteresis (N consecutive frames) so the dashboard does not
-flicker between modes. Density output can only become operational after that
-estimator is marked validated *and* the per-camera policy allows it; even then
-the source is reported with every count.
-"""
+"""Confidence and mode router."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -39,7 +21,6 @@ MODE_LABEL = {
 
 BAD_CAMERA_STATES = {"stale", "frozen", "dark", "low_contrast", "blurry"}
 
-
 @dataclass
 class RouterConfig:
     dense_box_height_px: float = 32.0
@@ -56,7 +37,6 @@ class RouterConfig:
     # Two dense estimators agreeing this closely is corroboration, not proof:
     # it earns a consensus estimate, never promotion to a validated count.
     consensus_tolerance: float = 0.25
-
 
 @dataclass
 class RouterOutput:
@@ -99,7 +79,6 @@ class RouterOutput:
             "estimator_spread_pct": self.estimator_spread_pct,
             **self.detail,
         }
-
 
 class ModeRouter:
     def __init__(self, config: RouterConfig | None = None):
@@ -275,10 +254,8 @@ class ModeRouter:
             "box detector operating inside its validated range",
             False, False, detail, head_point_count)
 
-
 def _severity(mode: str) -> int:
     return {SPARSE: 0, MODERATE: 1, DENSE: 2, UNKNOWN: 3}.get(mode, 0)
-
 
 def _consensus(head_points: float | None, density: float | None,
                tolerance: float) -> float | None:
@@ -291,7 +268,6 @@ def _consensus(head_points: float | None, density: float | None,
     if spread > tolerance:
         return None
     return (float(head_points) + float(density)) / 2.0
-
 
 def _disagrees(detector_count: int, density_count: float, tolerance: float) -> bool:
     if detector_count <= 0:
