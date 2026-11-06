@@ -7,7 +7,6 @@ services:
       args:
         # CPU by default. For a GPU host use docker-compose.gpu.yml instead.
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-        INSTALL_CROWD_SHIELD: ${INSTALL_CROWD_SHIELD:-0}
     image: godavari-crowd-monitor:${TAG:-cpu}
     container_name: godavari
     restart: unless-stopped
@@ -20,7 +19,7 @@ services:
       - "127.0.0.1:${PORT:-8000}:8000"
 
     environment:
-      CROWD_MODEL: ${CROWD_MODEL:-}
+      CROWD_MODEL: ${CROWD_MODEL:-yolo26n.pt}
       CROWD_CONF: ${CROWD_CONF:-0.30}
       CROWD_IMGSZ: ${CROWD_IMGSZ:-640}
       CROWD_TARGET_INFER_FPS: ${CROWD_TARGET_INFER_FPS:-5}
