@@ -19,6 +19,7 @@ FROM python:${PYTHON_VERSION}-slim-bookworm
 
 # Which PyTorch build to install: cpu | cu128 (CUDA 12.8) | cu126 | ...
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG INSTALL_CROWD_SHIELD=0
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -55,6 +56,23 @@ COPY requirements.txt ./
 # runtime libs above is the reliable choice in a container.
 RUN pip install -r requirements.txt
 
+# Optional dense-crowd backend.  The package owns the PET / DM-Count network
+# definitions and retrieves its checkpoints through its documented loader.
+# Its current pyproject metadata names a non-existent package and pins Python
+# to <3.11.  The runtime package is plain Python and all required dependencies
+# are already installed above, so copy only its `crowdshield` source package.
+# Keep the default detector-only image small and deterministic; production
+# dense nodes opt in with `--build-arg INSTALL_CROWD_SHIELD=1`.
+RUN if [ "${INSTALL_CROWD_SHIELD}" = "1" ]; then \
+      python -c "import io, pathlib, urllib.request, zipfile; z=zipfile.ZipFile(io.BytesIO(urllib.request.urlopen('https://github.com/khushi-git-7/Crowd_shield/archive/refs/heads/main.zip').read())); root=pathlib.Path('/usr/local/lib/python3.11/site-packages'); files=[x for x in z.namelist() if x.startswith('Crowd_shield-main/crowdshield/') and not x.endswith('/')]; [(root / x.split('/', 1)[1]).parent.mkdir(parents=True, exist_ok=True) or (root / x.split('/', 1)[1]).write_bytes(z.read(x)) for x in files];"; \
+    fi
+
+# Fetch the signed public-release checkpoints while the image is root-owned.
+# This prevents first-use downloads from failing under the non-root app user.
+RUN if [ "${INSTALL_CROWD_SHIELD}" = "1" ]; then \
+      python -c "from crowdshield.points import WEIGHTS, WEIGHTS_SHA256, WEIGHTS_URL; from crowdshield.density import DEFAULT_WEIGHTS, WEIGHTS_SHA256 as DENSITY_SHA256, WEIGHTS_URL as DENSITY_URL; from crowdshield.weights import fetch; fetch(WEIGHTS, WEIGHTS_URL, WEIGHTS_SHA256); fetch(DEFAULT_WEIGHTS, DENSITY_URL, DENSITY_SHA256)"; \
+    fi
+
 # Application code (context is filtered by .dockerignore).
 COPY app ./app
 COPY static ./static
@@ -67,7 +85,10 @@ COPY README.md ./
 # on a fresh clone there is no local file to copy, and `COPY yolo26n.pt*` would
 # fail the build outright. Set CROWD_MODEL to change the default weight.
 ARG WEIGHTS=yolo26n.pt
-RUN python -c "from ultralytics import YOLO; YOLO('${WEIGHTS}')" \
+# Both runtime defaults are baked in: YOLO26n for CPU, RT-DETR-l for GPU.
+# Set CROWD_MODEL at runtime to pin one; other families download on demand.
+ARG EXTRA_WEIGHTS=rtdetr-l.pt
+RUN python -c "from ultralytics import YOLO, RTDETR; YOLO('${WEIGHTS}'); RTDETR('${EXTRA_WEIGHTS}')" \
  && rm -rf /app/ultralytics
 
 # Non-root runtime user. /app/.data is chowned here so a *named* volume inherits
