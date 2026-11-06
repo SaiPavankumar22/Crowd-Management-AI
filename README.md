@@ -12,7 +12,7 @@ built to be watched in a control room.
 
 [Quick start](#quick-start) · [Docker](#run-it-in-docker) · [Deployment](docs/DEPLOYMENT.md) ·
 [Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Improvement plan](docs/improvement.md) ·
-[Test footage](docs/FOOTAGE.md) · [Results report (PDF)](docs/RESULTS_REPORT.pdf)
+[Test footage](docs/FOOTAGE.md) · [Results report (PDF)](docs/RESULTS_REPORT.pdf) · [Plan status](docs/PLAN_STATUS.md)
 
 ---
 
@@ -22,6 +22,8 @@ built to be watched in a control room.
 - [Quick start](#quick-start)
 - [Run it in Docker](#run-it-in-docker)
 - [How it works](#how-it-works)
+- [Dense-crowd estimators](#dense-crowd-estimators-pet--dm-count)
+- [Choosing a detector model](#choosing-a-detector-model)
 - [The dashboard](#the-dashboard)
 - [Zones, occupancy and alerts](#zones-occupancy-and-alerts)
 - [Performance and multi-camera limits](#performance-and-multi-camera-limits)
@@ -100,7 +102,7 @@ Or with compose: `docker compose up -d --build`, and for GPU
 `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`.
 
 `cameras.json`, uploads, sample clips and the alert database live in the `godavari-data`
-volume, so containers are disposable. Full instructions — Nebius GPU VM walkthrough,
+volume, so containers are disposable. Full instructions — GPU VM walkthrough,
 TLS + password proxy, backups, upgrades, troubleshooting — are in
 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
@@ -110,8 +112,8 @@ background worker mirrors cameras (without source paths/credentials), alerts, au
 events, count samples and heatmaps to MongoDB collections. Uploaded video and evidence
 remain on the local volume. MongoDB outages do not stop inference or local writes; check
 `mongodb` in `/api/system` for archive connection and queue status.
-This Nebius deployment's existing SQLite history has been migrated to Atlas. For another
-deployment, migrate history with `python tools/migrate_sqlite_to_mongo.py --apply` (run
+An existing SQLite history can be migrated to Atlas at any time. Migrate history with
+`python tools/migrate_sqlite_to_mongo.py --apply` (run
 inside the container with `--sqlite /app/.data/data/crowd.db --cameras
 /app/.data/data/cameras.json`). The migration uses idempotent upserts and can be rerun
 safely.
@@ -161,8 +163,105 @@ and lets overlays stay full-resolution regardless of stream quality.
 
 ---
 
-## The dashboard
+## Dense-crowd estimators (PET + DM-Count)
 
+A body detector counts bodies. In a packed crowd the people behind them are
+heads only, so the box count understates the crowd no matter how good the
+detector is. Two independent counting models therefore run beside it, from the
+Crowd Shield checkpoints in `models/`:
+
+| Model | Checkpoint | What it adds |
+|---|---|---|
+| PET | `models/pet_shab.pth` | One point per visible head: count **and** locations, per area |
+| DM-Count | `models/dmcount_shab.pth` | A density map; the map sums to a count, integrated per area |
+
+The network definitions are vendored in `third_party/crowdshield` (academic-use
+licence), and each load verifies the checkpoint's SHA-256 before use. The
+checkpoints themselves are not committed (large binaries, academic licence): drop
+them in `models/` or point `CROWD_MODELS_DIR` at them. Without them the service
+runs detector-only and the estimators report `available: false` with the reason.
+Both are **advisory**: the API reports `detector_count`, `head_point_count` and
+`density_count` side by side and `selected_count` stays `null` until a
+per-camera validation is signed off in the dashboard. They are never summed.
+
+When PET and DM-Count agree within 25% of each other, the dashboard stops
+showing the detector floor and shows their mean as `≈N`
+(`MODEL CONSENSUS · ESTIMATE`); the advisory alert then names both estimates
+and the spread. When they disagree, the badge falls back to `≥N` from the
+detector instead of inventing a middle. Neither path sets `selected_count`, so
+a consensus is information for the operator, not a promotion.
+
+Measured on the sample footage (RTX PRO 6000, five cameras):
+
+| Clip | Detector (detail pass) | PET | DM-Count | Headline | Spread |
+|---|---:|---:|---:|---:|---:|
+| 12269404 1080p crowd | ≥156 | 389 | 383 | **≈386** | 1.6% |
+| Getty 683716020 | ≥74 | 472 | 419 | **≈446** | 11.9% |
+| Getty 685608730 | 19 | 16 | 15 | ≈15 | 9.2% |
+| Getty 2289512996 | ≥10 | 27 | 49 | ≥10 | 57% |
+| VIRAT 010204 | ≥11 | 16 | 7 | ≥11 | 56% |
+
+PET runs every 5 s and DM-Count every 6 s per camera; both together add ~3.7 GB
+of GPU memory (2.6 → 6.3 GB) and no dropped frames. PET's ShanghaiTech count correction
+(`1.375 × raw^0.942`) is implemented but off by default: it was fitted on
+foreign footage, so a camera has to earn it locally.
+
+```bash
+CROWD_POINT_BACKEND=crowdshield     # enable PET head points
+CROWD_DENSITY_BACKEND=crowdshield   # enable DM-Count density
+CROWD_POINT_PERIOD_S=5              # advisory cadence per camera
+CROWD_DENSITY_PERIOD_S=6
+CROWD_MODELS_DIR=./models           # where the .pth files live
+CROWD_PET_CORRECTION=1              # opt in to the count correction
+```
+
+If a checkpoint is missing or altered the estimators report `available: false`
+with the reason, an audit row is written, and the detector path keeps running.
+The section-by-section audit of the full plan is in
+[docs/PLAN_STATUS.md](docs/PLAN_STATUS.md).
+
+---## Choosing a detector model
+
+Four families are registered. The **Engine** panel has a picker, `.env` can pin a
+default (`CROWD_MODEL`), and `PUT /api/models` switches at runtime: the
+replacement is loaded and warmed before the old one is retired, and a failed
+load leaves the previous model running.
+
+| Model | Family | Licence | When to use it |
+|---|---|---|---|
+| `yolo26n.pt` | YOLO26 | AGPL-3.0 | **Default.** Best recovery on packed frames |
+| `rtdetr-l.pt` | RT-DETR | Apache-2.0 | Better at medium density, misses packed frames |
+| `yolo11n.pt`, `yolov8n.pt` | YOLO | AGPL-3.0 | Fallbacks and cheap comparisons |
+| `rf-detr-base.pth` | RF-DETR | Apache-2.0 | needs `pip install rfdetr` |
+| `dfine_m_coco.pt` | D-FINE | Apache-2.0 | needs the `dfine` package |
+
+RT-DETR is one switch away, but it is not the default: on the 1080p crowd clip it
+finds **36** people where YOLO26n's detail pass finds **156**, because escalation
+triggers on a near-empty full-frame count. On the 60 labelled mall frames the
+ranking reverses (RT-DETR MAE 9.23, YOLO26n 15.33), so RT-DETR is the better pick
+for medium density and the worse one for a packed frame. RF-DETR and D-FINE are
+wired and listed but not benchmarked here; the picker shows them disabled until
+their package is installed. Switching details: [docs/DETECTORS.md](docs/DETECTORS.md).
+
+## API authentication
+
+Off by default, because the documented deployment binds to loopback behind a
+password proxy. Set `CROWD_AUTH_OPERATOR_TOKEN` and/or `CROWD_AUTH_VIEWER_TOKEN`
+to require a credential on every API route:
+
+```bash
+curl -H "X-API-Key: $CROWD_AUTH_VIEWER_TOKEN" localhost:8000/api/cameras
+curl -X PUT -H "X-API-Key: $CROWD_AUTH_OPERATOR_TOKEN" \
+     -d '{"name":"rtdetr-l.pt"}' localhost:8000/api/models
+```
+
+Reads accept either token; every mutating request needs the operator token.
+`/api/health`, the dashboard shell and `/static/` stay public so health checks
+and the page keep working; a missing or wrong token is `401`, a viewer attempting
+a write is `403`. Tokens are compared in constant time and never logged, and
+`?token=` is accepted for streams that cannot send headers.
+
+## The dashboard
 The console has three columns: a **collapsible sidebar** (sources, engine, insights), one
 **workspace** centred on the live video, and an **inspector** with three tabs — *Alerts*,
 *Areas & gates* and *Trust*. The sidebar remembers its state, and choosing a section while
@@ -358,7 +457,10 @@ Every setting is an environment variable; nothing needs editing in code.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CROWD_MODEL` | `yolo26n.pt` | `yolo26s.pt` for better far-field recall (more compute), `yolo11n.pt` / `yolov8n.pt` alternatives |
+| `CROWD_MODEL` | *(by device)* | Pin the detector: `rtdetr-l.pt` on CUDA, `yolo26n.pt` on CPU |
+| `CROWD_MODEL_CHOICES` | all registered | Comma list that narrows or extends what the picker offers |
+| `CROWD_AUTH_OPERATOR_TOKEN` | empty | Enables API auth; required for every mutating request |
+| `CROWD_AUTH_VIEWER_TOKEN` | empty | Read-only token for dashboards and scripts |
 | `CROWD_CONF` | `0.30` | Detection confidence threshold |
 | `CROWD_IMGSZ` | `640` | Inference resolution — 960–1280 for wide/aerial views with tiny people |
 | `CROWD_TARGET_INFER_FPS` | `5` | Inference rate per camera |
@@ -383,6 +485,14 @@ Every setting is an environment variable; nothing needs editing in code.
 | `CROWD_DENSE_BOX_HEIGHT_PX` | `32` | Small-box threshold that marks a scene dense |
 | `CROWD_DENSITY_MODEL` | empty | TorchScript density checkpoint (advisory only) |
 | `CROWD_DENSITY_VALIDATED` | `0` | Set only after a signed per-camera validation gate |
+| `INSTALL_CROWD_SHIELD` | `0` | Docker build argument that installs the optional PET / DM-Count package |
+| `CROWD_POINT_BACKEND` | empty | Set to `crowdshield` to enable PET head-point estimates |
+| `CROWD_DENSITY_BACKEND` | empty | Set to `crowdshield` to enable DM-Count density estimates |
+| `CROWD_POINT_MODEL_VALIDATED` | `0` | Enables a validated PET checkpoint for a camera promotion gate |
+| `CROWD_POINT_PERIOD_S` / `CROWD_DENSITY_PERIOD_S` | `1.5` / `1.5` | Rate limit for independent dense-model inference |
+| `CROWD_VALIDATION_MIN_SAMPLES` | `20` | Hand-counted samples required before a per-camera promotion |
+| `CROWD_VALIDATION_MAX_MAPE` | `0.20` | Maximum average percentage error accepted by the promotion gate |
+| `CROWD_VALIDATION_TTL_DAYS` | `30` | Promotion expiry; revalidate before it can select dense counts |
 | `CROWD_FRAME_QUEUE_SIZE` | `2` | Bounded inference queue size |
 | `CROWD_LOOP` | `1` | Loop file sources |
 | `CROWD_WARN_PCT` | `75` | Zone warning level (% of capacity) |
@@ -436,6 +546,9 @@ NOC dashboard can drive it.
 | `GET` | `/api/analytics/health` | Per-camera analytics dead-man / drift state |
 | `PUT` | `/api/cameras/{id}/calibration` | Save versioned ground-plane calibration points |
 | `PUT` | `/api/cameras/{id}/profile` | Set a persistent per-camera `global`, `balanced`, `dense`, or `custom` detector profile |
+| `GET` | `/api/cameras/{id}/estimation-policy` | Per-camera dense-estimate validation and promotion status |
+| `POST` | `/api/cameras/{id}/validation-samples` | Record a manual count and independent model count for PET or DM-Count |
+| `PUT` | `/api/cameras/{id}/estimation-policy` | Promote (`head_point` / `density`) or revoke (`none`) a validated dense estimate |
 | `WS` | `/ws` | Full snapshot (cameras + alerts + system) at `CROWD_WS_PERIOD` |
 
 ```bash
@@ -499,7 +612,7 @@ docker compose up -d --build                       # CPU
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # GPU
 ```
 
-Long version, including the Nebius GPU VM walkthrough, HTTPS + password proxy, backups,
+Long version, including the GPU VM walkthrough, HTTPS + password proxy, backups,
 upgrade/rollback and a troubleshooting table:
 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
@@ -516,7 +629,6 @@ TimescaleDB, and how to size a single L40S for ~100 cameras — is in
 | `tools/install.sh` / `tools/start_dev.sh` / `tools/start_dev.bat` | Project-local venv, pinned deps, server start |
 | `tools/ui_check.py` | Renders the dashboard in headless Chromium over CDP, prints DOM facts, fails on console errors, saves a screenshot — no GUI needed |
 | `tools/fetch_footage.py` | Downloads/trims the test clip library and writes `manifest.json` |
-| `tools/download_sample.py`, `tools/extract_pexels.py` | Older single-clip helpers |
 
 ```bash
 ./.venv/Scripts/python.exe tools/ui_check.py http://127.0.0.1:8000/ shot.png
@@ -528,17 +640,32 @@ TimescaleDB, and how to size a single L40S for ~100 cameras — is in
 
 ```
 app/
-  main.py        FastAPI app: REST, MJPEG, WebSocket, upload
+  main.py        Composition root: middleware, startup, router include
+  state.py       Model manager + camera registry shared by the routers
+  api/           One router module per concern
+    cameras.py   CRUD, zones, gate lines, calibration, dense-count validation
+    alerts.py    Alert stream, evidence, ack/close/escalate, outbox, audit
+    engine.py    Detector registry, health, Prometheus metrics, analytics health
+    insights.py  Event analytics, heatmap history, printable PDF reports
+    stream.py    MJPEG streams, snapshots, dashboard websocket
   pipeline.py    CameraWorker (capture → detect → track → zones) + CameraRegistry
-  detector.py    ModelManager: YOLO26n with fallbacks, device selection
+  detector.py    ModelManager: model families, warm-before-swap, tiling policy
+  adapters.py    Detector/estimator adapters (YOLO, RT-DETR, RF-DETR, D-FINE, PET, DM-Count)
+  detail.py      Detail-pass escalation for small people
+  router.py      Counting router: detector floor vs dense estimates
+  crowd_shield.py PET / DM-Count wrappers with checksum-verified checkpoints
   zones.py       Zone model, occupancy/density, level thresholds
   alerting.py    Sustained-threshold alert engine with hysteresis and cooldown
+  outbox.py      Durable alert outbox with HMAC webhook transport
+  district.py    Edge → district publisher and district aggregation (plan §8)
   heatmap.py     Decaying density grid from foot points
-  store.py       SQLite alert history
+  store.py       SQLite history, alerts, audit, outbox tables
   ingest.py      Upload/sample/RTSP source handling
+  auth.py        Optional operator/viewer API tokens
   config.py      Env-var configuration
 static/          Dashboard (index.html, app.js, style.css)
-tools/           Install, start, headless UI check, footage fetcher
+tools/           Install, start, headless UI check, footage fetcher, benchmarks
+third_party/     Vendored Crowd Shield definitions (academic licence)
 docs/            Architecture, deployment, footage, screenshots, results report
 Dockerfile, docker-compose.yml, docker-compose.gpu.yml
 ```
@@ -559,10 +686,11 @@ certified life-safety system.
   intended next model addition.
 - **No frozen-frame detection yet.** A stalled camera reads as "no congestion", which is the
   most dangerous failure mode for an alarm system; it is called out in the architecture doc.
-- **No authentication, no multi-user, no alert delivery** beyond the dashboard and CSV. Alert
-  webhooks/SMS and SSO are deployment work, not done here.
-- **One process, one machine.** The sharded design (many decode workers, one Triton server,
-  TimescaleDB, a control plane) is specified but not implemented.
+- **No accounts or SSO.** Optional operator/viewer API tokens exist and HMAC-signed webhook
+  delivery is proven end-to-end, but there are no users, sessions or SMS gateway.
+- **One machine per node.** Camera nodes publish signed summaries to a district node
+  (`app/district.py`); the central tier (Triton, TimescaleDB, a control plane) is still
+  design only, and there is no cross-camera de-duplication between nodes.
 - Zone counts are per-camera with no cross-camera de-duplication; overlapping views of the
   same gate will double-count.
 

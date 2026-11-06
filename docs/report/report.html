@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Godavari Crowd Monitor — Hackathon Submission &amp; Performance Report</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body {
+    font-family: "Segoe UI", -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif;
+    color: #0f172a; font-size: 9.1pt; line-height: 1.45;
+  }
+  .page {
+    width: 210mm; height: 297mm; padding: 14mm 14mm 15mm; position: relative;
+    overflow: hidden; page-break-after: always; background: #fff;
+  }
+  .page:last-child { page-break-after: auto; }
+  h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -0.015em; }
+  h2 { font-size: 17pt; line-height: 1.15; }
+  h3 { font-size: 10.2pt; color: #0b3b3a; margin-bottom: 2mm; }
+  p { margin: 0 0 2.2mm; }
+  ul { margin: 0 0 2.2mm; padding-left: 4.6mm; }
+  li { margin-bottom: 1.1mm; }
+  small { font-size: 7.6pt; color: #64748b; }
+  .muted { color: #475569; }
+  .kicker {
+    font-size: 7.4pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+    color: #b45309; margin-bottom: 2.5mm;
+  }
+  .rule { height: 2.6pt; width: 22mm; background: #f59e0b; margin: 2.5mm 0 4mm; }
+  .footer {
+    position: absolute; left: 14mm; right: 14mm; bottom: 6mm; display: flex;
+    justify-content: space-between; font-size: 7pt; color: #94a3b8;
+    border-top: 0.4pt solid #e2e8f0; padding-top: 1.8mm;
+  }
+  .cols { display: flex; gap: 7mm; }
+  .cols > div { flex: 1; min-width: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.1pt; margin: 1.5mm 0 3mm; }
+  th {
+    text-align: left; background: #0b3b3a; color: #f0fdfa; font-weight: 600;
+    padding: 1.6mm 2mm; font-size: 7.6pt; letter-spacing: 0.02em;
+  }
+  td { padding: 1.5mm 2mm; border-bottom: 0.4pt solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .card {
+    border: 0.6pt solid #e2e8f0; border-left: 2.4pt solid #0d9488; border-radius: 1.5mm;
+    padding: 3mm 3.2mm; background: #fbfdfd;
+  }
+  .card h4 { font-size: 8.8pt; margin-bottom: 1.2mm; color: #0f172a; }
+  .card p { margin: 0; font-size: 8pt; color: #334155; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 3.5mm; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3.5mm; }
+  .callout {
+    border: 0.6pt solid #fcd34d; background: #fffbeb; border-radius: 1.5mm;
+    padding: 2.8mm 3.2mm; font-size: 8.1pt; color: #78350f;
+  }
+  .callout strong { color: #78350f; }
+  .tag {
+    display: inline-block; font-size: 7pt; font-weight: 700; letter-spacing: 0.05em;
+    padding: 0.7mm 1.8mm; border-radius: 1mm; background: #ccfbf1; color: #115e59;
+  }
+  .tag.red { background: #fee2e2; color: #991b1b; }
+  .tag.amber { background: #fef3c7; color: #92400e; }
+  .bar-row { display: flex; align-items: center; gap: 2.5mm; margin-bottom: 2.2mm; font-size: 8pt; }
+  .bar-label { width: 62mm; color: #334155; }
+  .bar-track { flex: 1; height: 5.2mm; background: #f1f5f9; border-radius: 1mm; overflow: hidden; }
+  .bar { height: 100%; border-radius: 1mm; }
+  .bar-val { width: 24mm; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .flow { display: flex; flex-direction: column; gap: 1.2mm; }
+  .flow-row { display: flex; gap: 1.6mm; align-items: stretch; }
+  .node {
+    flex: 1; border: 0.6pt solid #cbd5e1; border-radius: 1.2mm; padding: 1.8mm 2mm;
+    background: #f8fafc; font-size: 7.6pt;
+  }
+  .node b { display: block; font-size: 8pt; color: #0b3b3a; margin-bottom: 0.4mm; }
+  .node.accent { border-color: #0d9488; background: #f0fdfa; }
+  .arrow { text-align: center; color: #94a3b8; font-size: 8pt; line-height: 1; margin: -0.6mm 0; }
+  .shot { border: 0.6pt solid #cbd5e1; border-radius: 1.5mm; overflow: hidden; }
+  .shot img { display: block; width: 100%; }
+  .kv { display: flex; justify-content: space-between; border-bottom: 0.4pt dotted #cbd5e1; padding: 1.3mm 0; font-size: 8.1pt; }
+  .kv span:last-child { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .check { color: #0d9488; font-weight: 700; }
+  .cross { color: #b91c1c; font-weight: 700; }
+  /* cover */
+  .cover {
+    background: radial-gradient(circle at 82% 8%, #0f766e 0%, #0b3b3a 42%, #081f24 100%);
+    color: #f0fdfa; padding: 26mm 18mm 18mm;
+  }
+  .cover .kicker { color: #fbbf24; }
+  .cover h1 { font-size: 40pt; line-height: 0.98; letter-spacing: -0.035em; }
+  .cover .sub { font-size: 13.5pt; line-height: 1.35; color: #ccfbf1; margin-top: 6mm; max-width: 150mm; }
+  .metric-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; margin-top: 16mm; }
+  .metric { border-top: 1.6pt solid #f59e0b; padding-top: 3mm; }
+  .metric .v { font-size: 24pt; font-weight: 700; letter-spacing: -0.03em; color: #fff; }
+  .metric .l { font-size: 8.2pt; color: #99f6e4; line-height: 1.35; }
+  .cover .meta { position: absolute; left: 18mm; right: 18mm; bottom: 14mm; display: flex;
+    justify-content: space-between; font-size: 8pt; color: #5eead4; border-top: 0.4pt solid #115e59; padding-top: 3mm; }
+  .badge { display: inline-block; border: 0.6pt solid #14b8a6; color: #5eead4; font-size: 7.4pt;
+    letter-spacing: 0.1em; text-transform: uppercase; padding: 1.2mm 2.4mm; border-radius: 1mm; }
+</style>
+</head>
+<body>
+
+<!-- ============================== 1 · COVER ============================== -->
+<section class="page cover">
+  <div class="badge">Hackathon submission · technical report</div>
+  <h1 style="margin-top:9mm">Godavari<br>Crowd Monitor</h1>
+  <div class="sub">Real-time crowd counting, zone congestion and capacity alerting
+  for mass gatherings — one service, no cloud, measured on real footage.</div>
+
+  <div class="metric-strip">
+    <div class="metric">
+      <div class="v">32 /s</div>
+      <div class="l">inferences per second on a consumer RTX&nbsp;3050, four live cameras at 8&nbsp;FPS each</div>
+    </div>
+    <div class="metric">
+      <div class="v">102 FPS</div>
+      <div class="l">YOLOv8x inference on an RTX&nbsp;PRO&nbsp;6000 (960&nbsp;px), 36&nbsp;FPS end to end</div>
+    </div>
+    <div class="metric">
+      <div class="v">&asymp; 386</div>
+      <div class="l">people estimated on one dense frame — PET and DM-Count agree within
+      1.6%, shown as an estimate, never a census</div>
+    </div>
+    <div class="metric">
+      <div class="v">15 clips</div>
+      <div class="l">real Kumbh, Hajj and platform crowds used for evaluation — including where it fails</div>
+    </div>
+  </div>
+
+  <div class="meta">
+    <span>v1.0 · November 2026 · Python 3.12 · FastAPI · YOLO26 · ByteTrack</span>
+    <span>All figures measured, not estimated</span>
+  </div>
+</section>
+
+<!-- ============================== 2 · PITCH ============================== -->
+<section class="page">
+  <div class="kicker">01 · The pitch</div>
+  <h2>Counting people is easy. Knowing a zone is about to fail is not.</h2>
+  <div class="rule"></div>
+
+  <div class="cols">
+    <div>
+      <h3>The problem</h3>
+      <ul>
+        <li><b>Control rooms watch, they cannot count.</b> One operator cannot judge 40 feeds,
+        so congestion builds in the one zone nobody is looking at.</li>
+        <li><b>Counts are not decisions.</b> "312 people detected" means nothing until you know
+        how many that gate can hold. Occupancy is the number an operator acts on.</li>
+        <li><b>Alarms without discipline get switched off.</b> A detector that fires on every
+        flickering frame trains staff to ignore it — the worst outcome for a safety tool.</li>
+        <li><b>Analytics suites are heavy.</b> A broker, a metrics database, a GPU cluster and a
+        licence negotiation stand between a volunteer event and any monitoring at all.</li>
+      </ul>
+
+      <h3 style="margin-top:4mm">What Godavari does</h3>
+      <ul>
+        <li>Turns any camera — uploaded clip, bundled sample, RTSP CCTV stream or webcam —
+        into a <b>zone-aware occupancy sensor</b>.</li>
+        <li>Detects people, gives each a persistent identity, and measures
+        <b>occupancy % of a declared capacity</b> per polygon zone, plus relative density and
+        flow direction.</li>
+        <li>Raises <b>one warning</b> on the rising edge and a <b>capacity alert only after
+        sustained overload</b>, with cooldown, chime, SQLite history and CSV export.</li>
+        <li>Ships as <b>one container</b>: no broker, no database server, no cloud account.</li>
+      </ul>
+    </div>
+
+    <div>
+      <h3>Why it stands apart</h3>
+      <div class="grid2" style="grid-template-columns:1fr; gap:2.6mm">
+        <div class="card">
+          <h4>Occupancy, not a raw count</h4>
+          <p>Each zone has a capacity. The dashboard shows <i>count / capacity</i>, occupancy %,
+          density and a colour level — the same mental model as a venue's own capacity limit.</p>
+        </div>
+        <div class="card">
+          <h4>Alerting with hysteresis</h4>
+          <p>Warning at 75 % on the rising edge; OVERCROWDED only after 5 s at ≥ 100 %;
+          repeats no more than once a minute. Signal, not noise — and every alert is persisted.</p>
+        </div>
+        <div class="card">
+          <h4>Runs where the budget is</h4>
+          <p>3.6 inferences/s on a CPU-only laptop for demos and small events; 32/s on a
+          second-hand GPU; 100+ FPS on server silicon. Same image, one build arg apart.</p>
+        </div>
+        <div class="card">
+          <h4>Honest engineering</h4>
+          <p>Every number in this report was measured on this build, including the
+          uncomfortable ones: box detectors under-count packed crowds. Where the picture is too
+          small to resolve people, the dashboard shows <b>≥ N</b> — a lower bound; when two
+          independent crowd models agree it shows <b>≈ N</b> and says “estimate”, never a
+          confident wrong number.</p>
+        </div>
+      </div>
+
+      <div style="margin-top:4mm" class="callout">
+        <strong>Status:</strong> a working system, not a mock. Camera add/remove, polygon zones,
+        occupancy, alerts, history, MJPEG streaming, heatmap, flow and wall view all run today —
+        verified in a browser, in Docker on CPU, and in Docker on a GPU.
+      </div>
+    </div>
+  </div>
+
+  <div class="footer"><span>Godavari Crowd Monitor · hackathon submission</span><span>2 / 10</span></div>
+</section>
+
+<!-- ============================== 3 · HOW IT WORKS ============================== -->
+<section class="page">
+  <div class="kicker">02 · How it works</div>
+  <h2>One process, one model, one honest bottleneck</h2>
+  <div class="rule"></div>
+
+  <div class="flow">
+    <div class="flow-row">
+      <div class="node"><b>Ingest</b>upload · sample clip · <code>rtsp://</code> · webcam index; files loop, streams reconnect</div>
+      <div class="node"><b>Capture thread</b>per camera, downscale to <code>CROWD_MAX_FRAME_WIDTH</code></div>
+      <div class="node accent"><b>Detect</b>YOLO26n (NMS-free) on CUDA or CPU, one shared model behind a lock</div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="flow-row">
+      <div class="node"><b>Track</b>ByteTrack IDs — a person is not counted twice</div>
+      <div class="node"><b>Measure</b>foot point → polygon zones → count, occupancy %, density</div>
+      <div class="node"><b>Derive</b>flow vector + speed, 48×27 decaying heatmap</div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="flow-row">
+      <div class="node accent"><b>Alert</b>sustain + cooldown → SQLite history, chime, CSV</div>
+      <div class="node"><b>Broadcast</b>snapshot every 0.6 s over WebSocket</div>
+      <div class="node"><b>Stream</b>annotated MJPEG at 12 FPS per camera</div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:5mm">
+    <div>
+      <h3>Four decisions that make it usable</h3>
+      <ul>
+        <li><b>One model, many cameras.</b> Memory stays flat as sources are added; each camera
+        gets its own inference budget, and the lock makes queuing predictable instead of
+        thrashing the GPU.</li>
+        <li><b>Foot point, not box overlap.</b> A person counts as inside a zone when their
+        bounding-box foot point falls in the polygon — overlapping queues stop double-counting.</li>
+        <li><b>EMA smoothing (60/40).</b> Occupancy is computed from a smoothed count, so a
+        frame of missed detections cannot flash a zone red.</li>
+        <li><b>State machine, not thresholds.</b> OK → BUSY → WARNING → OVERCROWDED, with
+        sustain timers and cooldown; the alarm reflects a condition, not a frame.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>What the operator sees</h3>
+      <ul>
+        <li><b>One camera, five views</b> — boxes, the clean picture, heatmap, isolated areas
+        and flow — plus an <b>all-views mosaic</b> of the same camera. Keys <b>1–5</b>, mosaic on
+        <b>0</b>; click any tile to open it full size.</li>
+        <li><b>Areas drawn on the video</b>: new area → click corners → name, capacity, save.
+        Stored per camera with a version, so the boundary survives a restart.</li>
+        <li><b>Gate lines</b> across an entrance count entries and exits in both directions.</li>
+        <li><b>Inspector</b> with three tabs: alerts and acknowledgement, the area/gate editor,
+        and analytics trust per camera.</li>
+        <li><b>Trend</b> with alert markers — the run-up to a breach, not only the breach.</li>
+        <li><b>Wall view</b> of every camera as a tile, for a control-room display.</li>
+      </ul>
+      <div class="kv"><span>Dashboard stack</span><span>vanilla JS + WebSocket (no framework)</span></div>
+      <div class="kv"><span>Transport</span><span>MJPEG (annotated and raw) + JSON snapshots</span></div>
+    </div>
+  </div>
+
+  <div style="margin-top:4mm; display:flex; gap:4mm; align-items:flex-start">
+    <div class="shot" style="flex:none">
+      <img src="../../docs/dashboard.png" alt="Godavari dashboard" style="height:66mm;width:auto;display:block">
+    </div>
+    <div style="font-size:7.8pt;color:#334155;line-height:1.5">
+      <b>Live dashboard, rebuilt around one camera.</b><br>
+      Collapsible sidebar with sources, engine and insights; view chips above the stage
+      (<b>all views · boxes · actual · heatmap · areas · flow</b>); HUD with
+      <b>≥ 11</b> people and the lower-bound badge; areas and gate line drawn on the video;
+      KPIs and the occupancy trend below.<br><br>
+      The same camera can be read five ways without losing the measurement, and the
+      all-views mosaic shows every view at once — clicking a tile opens it full size.
+    </div>
+  </div>
+
+  <div class="footer"><span>Architecture and dashboard</span><span>3 / 10</span></div>
+</section>
+
+<!-- ============================== 4 · TECH STACK ============================== -->
+<section class="page">
+  <div class="kicker">03 · Technology</div>
+  <h2>Tech stack: small, current, and pinned for a reason</h2>
+  <div class="rule"></div>
+
+  <table>
+    <tr><th style="width:22%">Layer</th><th style="width:30%">Technology</th><th style="width:13%">Version</th><th>Why this one</th></tr>
+    <tr><td>Language</td><td>Python</td><td>3.11 / 3.12</td><td>Native home of the vision and ML ecosystem; one language from ingest to API.</td></tr>
+    <tr><td>Detection</td><td>Ultralytics YOLO26n <small>(YOLO11n / YOLOv8n fallback)</small></td><td>8.4.120</td><td>NMS-free, strong on small/dense objects, ~10 ms on GPU; nano variant keeps CPU viable.</td></tr>
+    <tr><td>Tracking</td><td>ByteTrack via <code>supervision</code></td><td>0.18.0</td><td>Identity persistence for distinct-people counts; pinned because ≥0.24 removed <code>sv.ByteTrack</code>.</td></tr>
+    <tr><td>Vision</td><td>OpenCV</td><td>5.0.0.93</td><td>Decode, resize, annotate, JPEG encode. Standard wheel + <code>libgl1</code>, because the 5.0 headless wheel ships no <code>cv2</code>.</td></tr>
+    <tr><td>Numerics</td><td>PyTorch (+ torchvision)</td><td>2.11 CUDA 12.8 / 2.15 CPU</td><td>CUDA 12.8 is the first build with Blackwell (sm_120) kernels; cu121 silently fails there.</td></tr>
+    <tr><td>API</td><td>FastAPI + Uvicorn</td><td>0.141.1 / 0.52.4</td><td>Async REST, WebSocket and streaming in one process; typed models, zero boilerplate.</td></tr>
+    <tr><td>Frontend</td><td>Vanilla JS + CSS, Canvas sparklines</td><td>—</td><td>No build step, no framework, loads instantly from the same process.</td></tr>
+    <tr><td>Persistence</td><td>SQLite</td><td>stdlib</td><td>Alert history that survives restarts without operating a database server.</td></tr>
+    <tr><td>Packaging</td><td>Docker (slim-bookworm), Compose</td><td>CPU 0.67 GB / GPU 4.4 GB</td><td>Non-root uid 10001, healthcheck, weights baked in so startup needs no network.</td></tr>
+    <tr><td>Hardware path</td><td>CUDA 12.8 wheels, CPU fallback</td><td>sm_50 → sm_120</td><td>Same source runs on a laptop or a 96 GB server GPU; device chosen at start-up.</td></tr>
+  </table>
+
+  <div class="cols">
+    <div>
+      <h3>Deployment shapes verified</h3>
+      <table>
+        <tr><th>Environment</th><th>Build</th><th class="num">Size</th></tr>
+        <tr><td>Windows dev</td><td><code>tools/install.sh</code> → <code>.venv</code></td><td class="num">7.5 GB</td></tr>
+        <tr><td>Any host, CPU</td><td><code>docker build -t godavari:cpu .</code></td><td class="num">0.67 GB</td></tr>
+        <tr><td>GPU host</td><td><code>--build-arg TORCH_INDEX_URL=…/cu128</code></td><td class="num">4.4 GB</td></tr>
+        <tr><td>Ubuntu 24.04 VM</td><td>venv + cu128 wheels</td><td class="num">7.5 GB</td></tr>
+      </table>
+      <small>Dependencies are pinned in <code>requirements.txt</code>; every version above is the
+      one actually installed and exercised, not a target.</small>
+    </div>
+    <div>
+      <h3>Code layout</h3>
+      <table>
+        <tr><th>Path</th><th>Responsibility</th></tr>
+        <tr><td><code>app/pipeline.py</code></td><td>CameraWorker + registry (capture → detect → track → zones)</td></tr>
+        <tr><td><code>app/detector.py</code></td><td>Model manager, device selection, fallbacks</td></tr>
+        <tr><td><code>app/zones.py</code></td><td>Polygon geometry, occupancy, density, levels</td></tr>
+        <tr><td><code>app/alerting.py</code></td><td>Sustain + cooldown state machine</td></tr>
+        <tr><td><code>app/heatmap.py</code></td><td>Decaying 48×27 density grid</td></tr>
+        <tr><td><code>app/store.py</code></td><td>SQLite alert history, CSV export</td></tr>
+        <tr><td><code>static/</code></td><td>Dashboard (HTML/CSS/JS, no build)</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer"><span>Technology choices and their justifications</span><span>4 / 10</span></div>
+</section>
+
+<!-- ============================== 5 · PERFORMANCE ============================== -->
+<section class="page">
+  <div class="kicker">04 · Performance</div>
+  <h2>Measured throughput across four environments</h2>
+  <div class="rule"></div>
+
+  <table>
+    <tr>
+      <th style="width:26%">Environment</th><th style="width:16%">Detector</th>
+      <th class="num" style="width:11%">imgsz</th><th style="width:27%">Throughput</th><th>Reading</th>
+    </tr>
+    <tr>
+      <td>Development laptop, CPU-only torch</td><td>YOLO26n</td><td class="num">1280</td>
+      <td><b>3.6</b> inferences/s (1 camera); 1.8 FPS each with 2 cameras</td>
+      <td>Demo / small event</td>
+    </tr>
+    <tr>
+      <td><code>godavari:cpu</code> container</td><td>YOLO26n</td><td class="num">640</td>
+      <td><b>3.2</b> FPS, one camera, healthy container in ~9 s</td>
+      <td>Cheap always-on VM</td>
+    </tr>
+    <tr>
+      <td>RTX 3050 8 GB laptop GPU</td><td>YOLO26n</td><td class="num">640</td>
+      <td><b>32</b> inferences/s — 4 cameras × 8.0 FPS, 1.8 GB VRAM, ~130 % CPU</td>
+      <td>4–6 cameras per box</td>
+    </tr>
+    <tr>
+      <td>RTX PRO 6000 (96 GB), Ubuntu 24.04</td><td>YOLOv8x</td><td class="num">960</td>
+      <td><b>102</b> FPS inference, <b>35.8</b> FPS end-to-end</td>
+      <td>Large headroom, heavier model</td>
+    </tr>
+  </table>
+
+  <h3>Aggregate inferences per second <small class="muted">(higher is better; detectors differ, see note)</small></h3>
+  <div class="bar-row">
+    <span class="bar-label">Laptop CPU · YOLO26n @1280</span>
+    <div class="bar-track"><div class="bar" style="width:3.5%; background:#94a3b8"></div></div>
+    <span class="bar-val">3.6 /s</span>
+  </div>
+  <div class="bar-row">
+    <span class="bar-label">Docker CPU · YOLO26n @640</span>
+    <div class="bar-track"><div class="bar" style="width:3.1%; background:#64748b"></div></div>
+    <span class="bar-val">3.2 /s</span>
+  </div>
+  <div class="bar-row">
+    <span class="bar-label">RTX 3050 · YOLO26n @640 · 4 cams</span>
+    <div class="bar-track"><div class="bar" style="width:31%; background:#0d9488"></div></div>
+    <span class="bar-val">32 /s</span>
+  </div>
+  <div class="bar-row">
+    <span class="bar-label">RTX PRO 6000 · YOLOv8x @960</span>
+    <div class="bar-track"><div class="bar" style="width:100%; background:#f59e0b"></div></div>
+    <span class="bar-val">102 /s</span>
+  </div>
+  <small>YOLOv8x is roughly an order of magnitude heavier than YOLO26n, so the server-GPU
+  lead is larger than the bar lengths suggest. The two GPU numbers were produced by the same
+  code path, only the weights and device changed.</small>
+
+  <div class="grid2" style="margin-top:5mm">
+    <div>
+      <h3>How these were measured</h3>
+      <ul>
+        <li>Real clips, real detector: 1280×720 H.264, 30 FPS source, 40–100 frames per run.</li>
+        <li><b>Inference FPS</b> = frames ÷ time spent inside <code>model.predict</code> only.</li>
+        <li><b>End-to-end FPS</b> = frames ÷ wall clock, so it includes decode, tracking,
+        zone maths and annotation. Both are reported because quoting only the first is
+        how benchmarks lie.</li>
+        <li>GPU runs used <code>--gpus all</code> in Docker and a bare venv on the VM; both
+        reported <code>cuda_available: true</code> before timing.</li>
+        <li>Multi-camera figures come from four simultaneous sources with the 5 FPS cap
+        lifted, so the number reflects compute, not the configured throttle.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Footprint and start-up</h3>
+      <div class="kv"><span>VRAM, 4 cameras, YOLO26n</span><span>1.8 GB</span></div>
+      <div class="kv"><span>CPU image / GPU image</span><span>0.67 / 4.4 GB</span></div>
+      <div class="kv"><span>Container to healthy</span><span>~9 s</span></div>
+      <div class="kv"><span>Model weights baked in</span><span>no network at boot</span></div>
+      <div class="kv"><span>Memory growth per camera</span><span>thread + buffers only</span></div>
+      <div class="kv"><span>Database</span><span>SQLite file, no server</span></div>
+      <p style="margin-top:2.5mm"><small>One shared model instance means adding the fifth
+      camera does not add a second copy of the weights — the marginal cost is a capture
+      thread and its frame buffers.</small></p>
+    </div>
+  </div>
+
+  <div class="footer"><span>Performance · measured on this build</span><span>5 / 10</span></div>
+</section>
+
+<!-- ============================== 6 · ANALYSIS ============================== -->
+<section class="page">
+  <div class="kicker">05 · Analysis</div>
+  <h2>Where the milliseconds actually go</h2>
+  <div class="rule"></div>
+
+  <p>The server GPU is not the constraint — the single-threaded decode and annotation path is.
+  At 960 px, a YOLOv8x frame costs <b>9.8 ms</b> of inference inside a <b>28 ms</b> frame, so
+  roughly two-thirds of the wall clock is spent outside the model:</p>
+
+  <div style="margin:3mm 0 4mm">
+    <div class="bar-row">
+      <span class="bar-label">@960 — inference</span>
+      <div class="bar-track"><div class="bar" style="width:35%; background:#f59e0b"></div></div>
+      <span class="bar-val">9.8 ms</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">@960 — decode + annotate</span>
+      <div class="bar-track"><div class="bar" style="width:65%; background:#94a3b8"></div></div>
+      <span class="bar-val">18.2 ms</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">@1280 — inference</span>
+      <div class="bar-track"><div class="bar" style="width:43%; background:#f59e0b"></div></div>
+      <span class="bar-val">13.3 ms</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">@1280 — decode + annotate</span>
+      <div class="bar-track"><div class="bar" style="width:57%; background:#94a3b8"></div></div>
+      <span class="bar-val">17.4 ms</span>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div>
+      <h3>What that means in practice</h3>
+      <ul>
+        <li><b>Per-camera cost is bounded by the lock.</b> N cameras share one model, so total
+        throughput is capped by aggregate inference — not by camera count. That is why four
+        cameras on a 3050 each land on 8.0 FPS instead of 5, 5, 5, 5.</li>
+        <li><b>MJPEG is the hidden CPU tax.</b> Every connected viewer costs JPEG encodes; at
+        four cameras the 3050 test sat at ~130 % CPU while the GPU idled.</li>
+        <li><b>Scaling to 100 cameras is a deployment change, not a rewrite.</b> 100 cameras at
+        5 FPS is 500 inferences/s: batched inference (Triton), NVDEC decode and several
+        processes. The single-process design is honest about this ceiling.</li>
+        <li><b>A laptop still works.</b> At 3.6 inferences/s the app serves one or two cameras
+        at a real 3–5 FPS, which is enough for gate throughput counting.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Tuning knobs, in order of effect</h3>
+      <table>
+        <tr><th>Setting</th><th>Effect</th></tr>
+        <tr><td><code>CROWD_IMGSZ</code> 640 → 1280</td><td>Better far-field recall, ~2× cost</td></tr>
+        <tr><td><code>CROWD_MAX_FRAME_WIDTH</code></td><td>Caps decode cost per frame</td></tr>
+        <tr><td><code>CROWD_TARGET_INFER_FPS</code></td><td>Per-camera budget; the main fairness dial</td></tr>
+        <tr><td><code>CROWD_MODEL</code> n → s</td><td>Higher recall, ~3× compute</td></tr>
+        <tr><td><code>CROWD_STREAM_FPS</code> / <code>JPEG_QUALITY</code></td><td>Trades stream CPU for smoothness</td></tr>
+        <tr><td><code>CROWD_WS_PERIOD</code></td><td>Dashboard push rate vs. fan-out cost</td></tr>
+      </table>
+      <div class="callout" style="margin-top:2mm">
+        <strong>Rule of thumb for an event:</strong> one GPU box per 4–6 cameras at 5 FPS with
+        YOLO26n at 640 px — and a second box before you raise the resolution, because decode
+        is what saturates first.
+      </div>
+    </div>
+  </div>
+
+  <h3 style="margin-top:5mm">Scaling path, costed</h3>
+  <table>
+    <tr><th style="width:18%">Scale</th><th style="width:26%">Architecture</th><th>Change required</th></tr>
+    <tr><td>1–6 cameras</td><td>This application, one GPU container</td><td>None — deploy as-is</td></tr>
+    <tr><td>6–30 cameras</td><td>Several containers, one per GPU or per 5 cameras</td><td>Ops only; zones per camera already supported</td></tr>
+    <tr><td>30–100 cameras</td><td>MediaMTX fan-in, NVDEC decode, batched inference</td><td>New worker + Triton service (specified in <code>docs/PRODUCTION_ARCHITECTURE.md</code>)</td></tr>
+    <tr><td>100+ cameras</td><td>Sharded workers, TimescaleDB, server-side mosaic</td><td>Control plane and monitoring stack; the zone/alert model is unchanged</td></tr>
+  </table>
+
+  <div class="footer"><span>Where time is spent, and how to spend it better</span><span>6 / 10</span></div>
+</section>
+
+<!-- ============================== 7 · QUALITY ============================== -->
+<section class="page">
+  <div class="kicker">06 · Detection quality</div>
+  <h2>How good is it, on real crowds?</h2>
+  <div class="rule"></div>
+
+  <p>Fifteen licensed clips of actual mass gatherings — Maha Kumbh 2025, the Kaaba tawaf, Mumbai
+  platforms — sampled at 3 s, 15 s and 30 s with YOLO26n at <code>imgsz=1280</code>. The results
+  are useful precisely because they include the failures:</p>
+
+  <table>
+    <tr><th style="width:40%">Clip</th><th class="num" style="width:16%">People detected</th><th>Reading</th></tr>
+    <tr><td><code>kumbh_2025_river_walk</code> — packed one-way flow</td><td class="num">23 / 29 / 19</td><td><span class="tag">Reliable</span> dense but resolvable</td></tr>
+    <tr><td><code>kumbh_2025_walk_4k</code> — walking tour</td><td class="num">22 / 14 / 17</td><td><span class="tag">Good</span> front row clear, back rows occluded</td></tr>
+    <tr><td><code>tawaf_4k_walk</code> — circular mass at the Kaaba</td><td class="num">15 / 20 / 17</td><td><span class="tag amber">Partial</span> only the front rank resolves</td></tr>
+    <tr><td><code>kumbh_2013_maha_shivratri</code> — elevated wide view</td><td class="num">6 / 12 / 27</td><td><span class="tag amber">Variable</span> tiny figures, swings with visibility</td></tr>
+    <tr><td><code>station_rush_mumbai</code> — platform at 8 pm</td><td class="num">8 / 9 / 7</td><td><span class="tag amber">Under-counts</span> ~40 visible at the door</td></tr>
+    <tr><td><code>kumbh_2025_crowd_walk</code> — night, backlit</td><td class="num">6 / 10 / 2</td><td><span class="tag red">Degrades</span> lighting dominates</td></tr>
+    <tr><td><code>railway_crowd_india</code> — overhead crush</td><td class="num">1 / 3 / 3</td><td><span class="tag red">Fails</span> interlocked crowd is one texture</td></tr>
+    <tr><td><code>hajj_stock_nocopyright</code> — aerial Haram</td><td class="num">4</td><td><span class="tag red">Fails</span> tens of thousands visible, 4 found</td></tr>
+  </table>
+
+  <div class="cols">
+    <div>
+      <h3>Why the hard cases fail — and why that is expected</h3>
+      <p>A bounding-box detector needs to see a whole body with edges to separate it from its
+      neighbour. At platform-crush density there are no gaps, so people merge into texture. This
+      is the documented behaviour of the entire box-detector family, not a defect in this code —
+      and it is the single most important thing a buyer should know before trusting any such
+      product's headline accuracy.</p>
+      <p><b>Where it is strong:</b> resolvable, medium-density scenes — gate queues, walkways,
+      plazas, station concourses — which is exactly where zone-capacity alerting is useful,
+      because the trigger is a <i>trend</i> in occupancy, not a precise census.</p>
+      <p><b>Mitigations in place:</b> 1280 px inference for far-field detail; smoothed counts so
+      single-frame misses do not alarm; alerts that require sustained overload; capacities
+      chosen per zone by the operator.</p>
+
+      <h3 style="margin-top:4mm">Floor, or a corroborated estimate</h3>
+      <p>Agreement within 25% publishes the mean as <b>&asymp; N</b>
+      (<code>dense_consensus</code>); an unconfirmed count stays <b>&ge; N</b> with capacity
+      alerts suppressed.</p>
+      <table style="font-size:7.4pt">
+        <tr><th>Sample clip</th><th class="num">Detector</th><th class="num">PET</th>
+          <th class="num">DM-Count</th><th class="num">Headline</th><th class="num">Spread</th></tr>
+        <tr><td style="white-space:nowrap">1080p hall</td><td class="num">&ge;156</td><td class="num">389</td>
+          <td class="num">383</td><td class="num"><b>&asymp;386</b></td><td class="num">1.6%</td></tr>
+        <tr><td style="white-space:nowrap">Getty 683716020</td><td class="num">&ge;74</td><td class="num">472</td>
+          <td class="num">419</td><td class="num"><b>&asymp;446</b></td><td class="num">11.9%</td></tr>
+        <tr><td style="white-space:nowrap">Getty 2289512996</td><td class="num">&ge;10</td><td class="num">27</td>
+          <td class="num">49</td><td class="num">&ge;10</td><td class="num">57%</td></tr>
+        <tr><td style="white-space:nowrap">VIRAT 010204</td><td class="num">&ge;11</td><td class="num">16</td>
+          <td class="num">7</td><td class="num">&ge;11</td><td class="num">56%</td></tr>
+      </table>
+      <small>Five cameras, 5–6 s estimator cadence, ~92 ms p95 frame age. Neither mode sets
+      <code>selected_count</code>: promotion still requires per-camera validation.</small>
+    </div>
+    <div>
+      <h3>What is not claimed</h3>
+      <ul>
+        <li><span class="cross">✗</span> No labelled ground truth yet — so no mAP, precision or
+        recall figure is claimed anywhere in this report.</li>
+        <li><span class="cross">✗</span> Density is <i>relative</i> (people per 10k px²), not
+        metric people/m²; that needs a per-camera homography.</li>
+        <li><span class="check">✓</span> Frozen, stale, dark, low-contrast and blurry cameras
+        are detected and marked degraded, never reported as an empty scene.</li>
+        <li><span class="cross">✗</span> No cross-camera de-duplication; two views of one gate
+        double-count.</li>
+        <li><span class="check">✓</span> Two dense-crowd estimators cross-check the detector and
+        publish <b>≈ N</b> only when they agree.</li>
+      </ul>
+      <h3 style="margin-top:3mm">Resolution is a limit you can pay to lift</h3>
+      <table style="font-size:7.6pt">
+        <tr><th>Pass</th><th class="num">People found</th><th class="num">Cost</th></tr>
+        <tr><td>Full frame @ 640 (default)</td><td class="num">0.3</td><td class="num">10 ms</td></tr>
+        <tr><td>2×2 probe @ 640 — only if the default found ≤ 6</td><td class="num">4.4</td><td class="num">15 ms</td></tr>
+        <tr><td>3×3 detail @ 1280 — only if the probe disagrees</td><td class="num"><b>135.4</b></td><td class="num">58 ms</td></tr>
+      </table>
+      <small>768×432 Getty clip, several hundred people in frame. Two cheaper triggers were
+      measured and rejected: edge density scored 0.42–0.89 on <i>every</i> clip (it reads
+      texture, not people), and frame-to-frame motion was ~0.000 on standing crowds.</small>
+    </div>
+  </div>
+
+  <div class="footer"><span>Detection quality on real footage, failures included</span><span>7 / 10</span></div>
+</section>
+
+<!-- ============================== 8 · ENGINEERING ============================== -->
+<section class="page">
+  <div class="kicker">07 · Engineering quality</div>
+  <h2>What was actually verified</h2>
+  <div class="rule"></div>
+
+  <div class="cols">
+    <div>
+      <h3>Behaviour</h3>
+      <ul>
+        <li><span class="check">✓</span> Camera add → live count, in the browser and via API.</li>
+        <li><span class="check">✓</span> Polygon zones drawn, saved, reloaded and enforced.</li>
+        <li><span class="check">✓</span> Zone state machine reaches OVERCROWDED and alerts fire
+        once per cooldown; history survives a restart; CSV export works.</li>
+        <li><span class="check">✓</span> MJPEG stream and snapshot JPEG served for every source.</li>
+        <li><span class="check">✓</span> Data-loss regression fixed: saved cameras load before
+        model warm-up, so an early edit can no longer wipe <code>cameras.json</code>.</li>
+        <li><span class="check">✓</span> Path traversal on sample names rejected with HTTP 400.</li>
+        <li><span class="check">✓</span> Headless UI check reports no console problems.</li>
+        <li><span class="check">✓</span> Both dense estimators verified on live cameras: a clip
+        reporting <b>4</b> people full-frame reports <b>≥156</b> at <code>tier=detail</code>, and
+        <b>≈386</b> when PET (389) and DM-Count (383) agree within 1.6%;
+        <code>selected_count</code> stays <code>null</code> in both dense modes; the badge reads
+        <b>≈ N · MODEL CONSENSUS · ESTIMATE</b>.</li>
+        <li><span class="check">✓</span> Escalation is sticky per camera with hysteresis — a
+        packed scene cannot alternate between “7” and “≥ 146” on consecutive frames. Verified by
+        polling the API 8 times through a dense clip.</li>
+        <li><span class="check">✓</span> Areas and gate lines survive a restart; every geometry
+        change bumps <code>zones_version</code> and writes an audit row.</li>
+        <li><span class="check">✓</span> Five views and the mosaic: distinct tile hashes, raw
+        stream with 0 box-coloured pixels, tile click returns to the single view.</li>
+        <li><span class="check">✓</span> Alert acknowledgement from the UI records
+        <code>ack_by=operator</code> with an audit entry.</li>
+        <li><span class="check">✓</span> 69 unit tests covering router decisions (including
+        dense consensus), detail escalation, tiling, zones, alerts, health, calibration, the
+        Crowd Shield adapters and the API.</li>
+      </ul>
+
+      <h3 style="margin-top:3.5mm">Deployment</h3>
+      <ul>
+        <li><span class="check">✓</span> CPU image built, healthy in ~9 s, camera at 3.2 FPS,
+        zones applied, snapshot served.</li>
+        <li><span class="check">✓</span> State persistence: <code>docker restart</code> kept the
+        camera and its two zones (volume-backed).</li>
+        <li><span class="check">✓</span> GPU image on an RTX 3050: <code>cuda: true</code>,
+        four cameras, 32 inferences/s.</li>
+        <li><span class="check">✓</span> Second GPU host (RTX PRO 6000, Blackwell) installed
+        from scratch: sm_120 kernels confirmed with a real matmul, 102 FPS with YOLOv8x.</li>
+        <li><span class="check">✓</span> Both compose files validate with <code>docker compose config</code>.</li>
+      </ul>
+    </div>
+
+    <div>
+      <h3>Security and operating posture</h3>
+      <ul>
+        <li>Binds to <b>127.0.0.1</b> by default; publishing is a deliberate act.</li>
+        <li><b>No authentication by design</b> — the documented deployment puts TLS and a
+        password in front (Caddy/nginx examples provided). This is stated in the README, not
+        hidden.</li>
+        <li>Container runs as <b>non-root uid 10001</b>; uploaded filenames are sanitised;
+        sample paths are resolved and confined.</li>
+        <li>No secrets, no telemetry, no outbound calls at runtime — weights are baked into
+        the image.</li>
+        <li>Healthcheck polls <code>/api/system</code> with a 120 s start period for cold
+        model load; single-process design is documented because multiple workers would split
+        the in-memory registry.</li>
+      </ul>
+
+      <h3 style="margin-top:3.5mm">Licensing — read this before a public demo</h3>
+      <div class="callout">
+        Ultralytics YOLO is <strong>AGPL-3.0</strong>. Serving it as a network service to third
+        parties can oblige you to publish corresponding source; internal use is normally fine,
+        and a commercial deployment should buy a licence or swap the detector.
+        Of the 15 test clips, only four are Creative Commons (one non-commercial) — the YouTube
+        clips are <em>evaluation only</em> and must be replaced before any public demo.
+      </div>
+
+      <h3 style="margin-top:3.5mm">Known limits, stated up front</h3>
+      <table>
+        <tr><td><b>Relative density</b></td><td>Needs homography for people/m²</td></tr>
+        <tr><td><b>Very dense crowds</b></td><td>Escalation plus two independent models gives
+        <b>≈ N</b> when they agree and <b>≥ N</b> when they do not; neither is a census, and
+        promotion still requires per-camera validation.</td></tr>
+        <tr><td><b>Cost of detail</b></td><td>3×3 @1280 on a dense camera roughly halves its
+        frame rate (≈8 → 4 FPS), which is why it is gated behind two cheap checks</td></tr>
+        <tr><td><b>Dead camera</b></td><td>Detected and marked degraded (stale/frozen/dark);
+        those states never clear an alert</td></tr>
+        <tr><td><b>Delivery</b></td><td>Dashboard, CSV/PDF reports and signed webhooks with
+        retries; no SMS or email sink yet</td></tr>
+        <tr><td><b>Scale-out</b></td><td>Single process; sharded design specified, not built</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer"><span>Verification, security posture and honest limits</span><span>8 / 10</span></div>
+</section>
+
+<!-- ============================== 9 · SUBMISSION PACK ============================== -->
+<section class="page">
+  <div class="kicker">08 · Submission pack</div>
+  <h2>Pitch, demo and judging map</h2>
+  <div class="rule"></div>
+
+  <div class="grid2">
+    <div class="card" style="border-left-color:#f59e0b">
+      <h4>One-liner</h4>
+      <p style="font-size:9.2pt; color:#0f172a; line-height:1.5"><b>Godavari turns any camera
+      into a zone-aware crowd sensor: it measures occupancy against the capacity you declare,
+      and shouts only when a zone stays over that line.</b></p>
+    </div>
+    <div class="card">
+      <h4>Thirty-second pitch</h4>
+      <p>Every large gathering is still managed by eyeballs on a wall of screens. Counts do not
+      help: an operator needs to know a zone is <i>over capacity</i>, and needs to know it before
+      the crush, not after. Godavari adds polygon zones with real capacities to ordinary cameras,
+      smooths the counts so they do not flicker, and raises one alert when a zone stays full —
+      then writes it to a history you can export. It runs on a laptop CPU today, on a single GPU
+      for four to six cameras, and ships as one 670 MB container with no cloud dependency.</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:5mm">Two-minute demo script</h3>
+  <table>
+    <tr><th style="width:6%">#</th><th style="width:34%">Action</th><th>What the judge sees</th></tr>
+    <tr><td>1</td><td><b>+ Add</b> → *Pilgrim* → pack walk to the river</td>
+      <td>Live annotated feed with counts within seconds; status goes LIVE</td></tr>
+    <tr><td>2</td><td><b>Draw zone</b> → gate polygon → capacity 8 → <b>Finish</b></td>
+      <td>Zone chip appears with count/capacity and occupancy %, colour-coded</td></tr>
+    <tr><td>3</td><td>Toggle <b>H</b> then <b>Z</b>, then <b>F</b></td>
+      <td>Heatmap of compression, zone polygons, flow arrow with speed</td></tr>
+    <tr><td>4</td><td>Lower the capacity below the current count and wait 5 s</td>
+      <td>WARNING on the rising edge → OVERCROWDED, chime, alert in the stream</td></tr>
+    <tr><td>5</td><td>Reload the page; then <b>Export CSV</b></td>
+      <td>Alerts persist across restarts and leave the app as data</td></tr>
+  </table>
+
+  <h3 style="margin-top:4mm">Judging-criteria map</h3>
+  <table>
+    <tr><th style="width:22%">Criterion</th><th style="width:48%">Evidence in this build</th><th>Where to look</th></tr>
+    <tr><td><b>Impact</b></td><td>Zone occupancy against declared capacity is the number a control
+      room acts on; alerts are rate-limited so they stay trusted.</td><td>§02 zones &amp; alerts</td></tr>
+    <tr><td><b>Technical depth</b></td><td>Detection + tracking + polygon geometry + EMA smoothing
+      + hysteresis state machine + WebSocket fan-out in one process; CUDA/CPU parity; measured
+      bottleneck analysis.</td><td>§03, §05, §06</td></tr>
+    <tr><td><b>Execution</b></td><td>Working UI, REST API, MJPEG, SQLite history, Docker CPU and
+      GPU images, deployment guide, evaluated on 15 real clips.</td><td>§07</td></tr>
+    <tr><td><b>Originality</b></td><td>Occupancy-first model with alert discipline, rather than
+      another detection demo; states its own failure modes.</td><td>§01, §06</td></tr>
+    <tr><td><b>Feasibility</b></td><td>Runs on a laptop today; scaling path costed by camera count
+      with named technologies.</td><td>§05, §06</td></tr>
+    <tr><td><b>Integrity</b></td><td>No fabricated accuracy: no mAP claimed without labels;
+      AGPL and footage licences disclosed.</td><td>§06, §08</td></tr>
+  </table>
+
+  <div class="grid2" style="margin-top:2mm">
+    <div><h3>Demo assets</h3>
+      <ul>
+        <li>Dashboard screenshot (this document), plus live app on loopback.</li>
+        <li>15-clip pilgrim library, 45 s each, instant start.</li>
+        <li>Container images: CPU 0.67 GB, GPU 4.4 GB.</li>
+      </ul>
+    </div>
+    <div><h3>Team &amp; links <small class="muted">(fill in)</small></h3>
+      <ul>
+        <li>Team: <span class="muted">name · members · roles</span></li>
+        <li>Repository: <span class="muted">URL</span> · Demo video: <span class="muted">URL</span></li>
+        <li>Contact: <span class="muted">email</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer"><span>Pitch, demo flow and criteria mapping</span><span>9 / 10</span></div>
+</section>
+
+<!-- ============================== 10 · ROADMAP + APPENDIX ============================== -->
+<section class="page">
+  <div class="kicker">09 · Next and appendix</div>
+  <h2>Roadmap and reference</h2>
+  <div class="rule"></div>
+
+  <div class="cols">
+    <div>
+      <h3>Next 90 days</h3>
+      <table>
+        <tr><th style="width:52%">Item</th><th>Why it matters</th></tr>
+        <tr><td>Per-camera validation (manual counts → MAPE)</td><td>Promotes a camera from
+        advisory estimate to a signed-off count source</td></tr>
+        <tr><td>Per-camera homography → people/m²</td><td>Turns relative density into safety bands</td></tr>
+        <tr><td>Labelled gate clip → first real mAP</td><td>Replace qualitative claims with metrics</td></tr>
+        <tr><td>Auth + role-scoped API keys</td><td>Multi-operator deployments</td></tr>
+        <tr><td>TimescaleDB + SSE fan-out</td><td>Retention, aggregates, restarts without
+        dropping dashboards</td></tr>
+        <tr><td>MediaMTX + NVDEC + Triton</td><td>The 100-camera step; keeps the current path
+        as the dev/CPU path</td></tr>
+      </table>
+      <p><small>Effort is deliberately not quoted per item: each is a week-scale task for one
+      engineer, and the first two unlock the others.</small></p>
+
+      <h3 style="margin-top:5mm">Appendix B · Key settings</h3>
+      <table style="font-size:7.6pt">
+        <tr><td><code>CROWD_MODEL</code></td><td>by device: rtdetr-l / yolo26n</td></tr>
+        <tr><td><code>CROWD_CONF</code></td><td>0.30</td></tr>
+        <tr><td><code>CROWD_IMGSZ</code></td><td>640</td></tr>
+        <tr><td><code>CROWD_DETAIL_PASS</code></td><td>on</td></tr>
+        <tr><td><code>CROWD_DETAIL_PROBE_BELOW</code></td><td>6</td></tr>
+        <tr><td><code>CROWD_DETAIL_IMGSZ / GRID</code></td><td>1280 / 3</td></tr>
+        <tr><td><code>CROWD_POINT_BACKEND</code></td><td>crowdshield (PET)</td></tr>
+        <tr><td><code>CROWD_DENSITY_BACKEND</code></td><td>crowdshield (DM-Count)</td></tr>
+        <tr><td><code>CROWD_POINT_PERIOD_S / DENSITY_PERIOD_S</code></td><td>5 / 6</td></tr>
+        <tr><td><code>CROWD_PET_CORRECTION</code></td><td>off until locally validated</td></tr>
+        <tr><td><code>CROWD_WARN_PCT</code></td><td>75</td></tr>
+        <tr><td><code>CROWD_ALERT_SUSTAIN / COOLDOWN</code></td><td>5 s / 60 s</td></tr>
+        <tr><td><code>HOST</code> / <code>PORT</code></td><td>127.0.0.1 / 8000</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3>Appendix A · HTTP API</h3>
+      <table style="font-size:7.6pt">
+        <tr><td><code>GET</code> /api/cameras</td><td>All cameras + live metrics</td></tr>
+        <tr><td><code>POST</code> /api/cameras</td><td>Add file / sample / RTSP source</td></tr>
+        <tr><td><code>GET</code> /api/cameras/{id}</td><td>One camera</td></tr>
+        <tr><td><code>DELETE</code> /api/cameras/{id}</td><td>Stop and remove</td></tr>
+        <tr><td><code>PUT</code> /api/cameras/{id}/zones</td><td>Replace polygon areas (bumps version)</td></tr>
+        <tr><td><code>PUT</code> /api/cameras/{id}/count-lines</td><td>Gate lines (entry/exit counts)</td></tr>
+        <tr><td><code>PUT</code> /api/cameras/{id}/display</td><td>Bake detection boxes or not</td></tr>
+        <tr><td><code>GET</code> /api/cameras/{id}/stream</td><td>Annotated MJPEG; <code>?raw=1</code>
+        for the clean frame</td></tr>
+        <tr><td><code>GET</code> /api/cameras/{id}/snapshot</td><td>Single annotated JPEG</td></tr>
+        <tr><td><code>GET</code> /api/samples</td><td>Sample library</td></tr>
+        <tr><td><code>GET</code> /api/alerts</td><td>Alert history</td></tr>
+        <tr><td><code>POST</code> /api/alerts/{id}/ack</td><td>Acknowledge, with audit row</td></tr>
+        <tr><td><code>GET</code> /api/alerts/export</td><td>CSV export</td></tr>
+        <tr><td><code>GET</code> /api/analytics</td><td>Forecasts, growth, queues, transitions</td></tr>
+        <tr><td><code>GET</code> /api/reports/daily.pdf</td><td>Daily PDF report</td></tr>
+        <tr><td><code>GET</code> /api/audit</td><td>Operator and system audit trail</td></tr>
+        <tr><td><code>GET</code> /api/models</td><td>Registry, licence, swap</td></tr>
+        <tr><td><code>GET</code> /api/health · /metrics</td><td>Scheduler and Prometheus metrics</td></tr>
+        <tr><td><code>GET</code> /api/system</td><td>Model, device, uptime</td></tr>
+        <tr><td><code>WS</code> /ws</td><td>Snapshot push every 0.6 s</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:3mm;font-size:7.6pt">
+    <strong>Reproduce:</strong> <code>bash tools/install.sh</code> →
+    <code>bash tools/start_dev.sh</code>, add a sample camera, read <code>/api/system</code>.
+    Containers per <code>docs/DEPLOYMENT.md</code>; clip metrics with
+    <code>tools/fetch_footage.py</code> and <code>tools/bench_models.py</code>.
+  </div>
+
+  <div class="footer"><span>Roadmap, API and settings · November 2026</span><span>10 / 10</span></div>
+</section>
+
+</body>
+</html>

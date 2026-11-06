@@ -216,7 +216,7 @@ Three hard truths drive the design:
   open LL-HLS/WebRTC only for the camera an operator focuses. 50 × 2 Mbps = 100 Mbps egress
   instead of 10 Gbps.
 
-### Sizing for the Nebius VM
+### Sizing for a GPU deployment
 
 | VM | Spec | Runs |
 |---|---|---|
@@ -322,9 +322,10 @@ single-VM implementation, so the gap between the two is explicit.
 | Transport | WebSocket snapshots + MJPEG per camera (annotated and raw) | SSE fan-out, server-side mosaic |
 | Dashboard | one camera, five views and an all-views mosaic, inspector for alerts/areas/trust | multi-operator wall |
 
-**Measured on the Nebius VM (RTX-class GPU, 4 sample cameras):** 4.0–5.2 inference FPS per
-camera with the detail pass active on dense sources, ~60–85 ms p95 frame age, zero dropped or
-stale frames, 30 tests green.
+**Measured on an RTX PRO 6000 (Blackwell, five sample cameras, detail pass active on dense
+sources):** 3.7–4.5 inference FPS per camera, ~92 ms p95 frame age, zero dropped or stale
+frames, 64 tests green. Loading both dense-crowd estimators costs ~3.7 GB more VRAM
+(2.6 → 6.3 GB total).
 
 **Detail pass, measured on a 768×432 clip of a few hundred people:** full frame @640 finds
 **0.3** people; a 2×2 probe @640 finds **4.4**; 3×3 @1280 finds **135.4** in 58 ms. Two cheaper

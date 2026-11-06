@@ -139,7 +139,7 @@ decisions.
 ### Labeled benchmark update (2026-11-06)
 
 The CUHK Mall research dataset provides 2,000 fixed-webcam frames with manual
-per-frame head-count annotations. On the Nebius RTX PRO 6000, the existing
+per-frame head-count annotations. On an NVIDIA RTX PRO 6000 Blackwell, the existing
 person-box counting path substantially undercounted this indoor dense-scene set:
 YOLO26n MAE **15.99 people/frame** (WAPE **51.3%**) and YOLOv8x MAE **16.79
 people/frame** (WAPE **53.9%**). The larger model was slower and did not improve

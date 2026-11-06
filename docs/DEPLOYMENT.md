@@ -47,7 +47,7 @@ That single-process design is deliberate and it constrains deployment:
 |---|---|---|---|
 | **A. Local, no container** (`tools/start_dev.sh`) | Development, demo on this laptop | 2–4 on CPU | none |
 | **B. Docker, CPU host** (`Dockerfile` default) | Small venue, single server, 1–4 cameras | 2–4 | 5 min |
-| **C. Docker, GPU VM** (Nebius L40S) — **recommended for a real event** | Many RTSP cameras, 24/7 | ~10–20 with this app; 100+ with the sharded design | 20 min |
+| **C. Docker, GPU VM** (L40S-class) — **recommended for a real event** | Many RTSP cameras, 24/7 | ~10–20 with this app; 100+ with the sharded design | 20 min |
 | **D. Bare metal + systemd** | You already run the host and dislike containers | same as B/C | 15 min |
 | **E. Kubernetes** | Multiple sites, central ops | — | not yet: one process, one volume |
 
@@ -70,6 +70,13 @@ docker build -t godavari:cpu .
 docker build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128 \
              -t godavari:gpu .
 ```
+
+To include PET head points and DM-Count in an edge image, add
+`--build-arg INSTALL_CROWD_SHIELD=1`. Enable the paths at runtime with
+`CROWD_POINT_BACKEND=crowdshield` and/or `CROWD_DENSITY_BACKEND=crowdshield`.
+They start as independent advisory estimates. The dashboard records hand-count
+checks per camera and only permits a selected dense count after calibration,
+the configured sample count and error threshold are met.
 
 Other CUDA lines: `cu126`, `cu124`, `cu121` — match your host driver.
 `nvidia-smi` shows the driver's CUDA version; pick a wheel that is **≤** it.
@@ -147,14 +154,14 @@ not passed, or the driver/toolkit is missing — in that order.
 
 ---
 
-## 4. Nebius GPU VM, step by step
+## 4. GPU VM, step by step
 
 The target shape: one GPU VM running the container, a small disk, and the
 dashboard reachable over HTTPS.
 
-1. **Create the VM** — Nebius AI Cloud → Compute → *GPU platform*, preset
-   `1gpu-8vcpu-32gb` (L40S, 48 GB VRAM, 32 GB RAM). Ubuntu 24.04 with the
-   NVIDIA driver image, 100 GB disk (OS + image + a few GB of clips).
+1. **Create the VM** — any GPU cloud or on-prem host: a 1×L40S-class GPU
+   (48 GB VRAM), 8 vCPU / 32 GB RAM. Ubuntu 24.04 with the NVIDIA driver
+   image, 100 GB disk (OS + image + a few GB of clips).
 2. **Attach a public IP** and allow inbound **443** (and 22 for SSH) in the
    security group. Do not open 8000 to the internet.
 3. **Install Docker + NVIDIA container toolkit:**
@@ -238,6 +245,10 @@ already parameterised from your shell (`CROWD_MODEL=... docker compose up -d`).
 | `CROWD_DATA_DIR` | `/app/.data/data` | `cameras.json`, `crowd.db` |
 | `CROWD_UPLOADS_DIR` | `/app/.data/uploads` | Uploaded clips |
 | `CROWD_SAMPLES_DIR` | `/app/.data/samples` | Sample library (supports one level of subfolders) |
+| `CROWD_POINT_BACKEND` / `CROWD_DENSITY_BACKEND` | empty | Set either to `crowdshield` to enable PET / DM-Count on a dense node |
+| `CROWD_POINT_MODEL_VALIDATED` / `CROWD_DENSITY_VALIDATED` | `0` | Allow that checkpoint to pass a per-camera promotion gate |
+| `CROWD_VALIDATION_MIN_SAMPLES` | `20` | Manual checks required before dense-source promotion |
+| `CROWD_VALIDATION_MAX_MAPE` | `0.20` | Maximum mean absolute percentage error accepted at promotion |
 
 Sizing, measured here and estimated for GPU (see §9 for what was actually
 measured):
