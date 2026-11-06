@@ -6,9 +6,9 @@ and are selectable in the dashboard's *Add camera* picker under the **Pilgrim** 
 Re-fetch, extend or repair the set with:
 
 ```bash
-./.venv/Scripts/python.exe tools/fetch_footage.py            # fetch what is missing
-./.venv/Scripts/python.exe tools/fetch_footage.py --list     # what is already here
-./.venv/Scripts/python.exe tools/fetch_footage.py --only tawaf_4k_walk
+./.venv/Scripts/python.exe backend/tools/fetch_footage.py            # fetch what is missing
+./.venv/Scripts/python.exe backend/tools/fetch_footage.py --list     # what is already here
+./.venv/Scripts/python.exe backend/tools/fetch_footage.py --only tawaf_4k_walk
 ```
 
 Every clip is trimmed to 45 s (25 fps, ≤ 1280 px wide, no audio, H.264 CRF 27) so the whole

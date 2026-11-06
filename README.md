@@ -11,14 +11,15 @@ built to be watched in a control room.
 ![Live dashboard: collapsible sidebar, five camera views, areas and gate lines, KPIs](docs/dashboard.png)
 
 [Quick start](#quick-start) · [Docker](#run-it-in-docker) · [Deployment](docs/DEPLOYMENT.md) ·
-[Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Improvement plan](docs/improvement.md) ·
-[Test footage](docs/FOOTAGE.md) · [Results report (PDF)](docs/RESULTS_REPORT.pdf) · [Plan status](docs/PLAN_STATUS.md)
+[Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Detectors](docs/DETECTORS.md) ·
+[Test footage](docs/FOOTAGE.md) · [Results report (PDF)](docs/RESULTS_REPORT.pdf)
 
 ---
 
 ## Contents
 
 - [What it does](#what-it-does)
+- [Tech stack](#tech-stack)
 - [Quick start](#quick-start)
 - [Run it in Docker](#run-it-in-docker)
 - [How it works](#how-it-works)
@@ -27,8 +28,6 @@ built to be watched in a control room.
 - [The dashboard](#the-dashboard)
 - [Zones, occupancy and alerts](#zones-occupancy-and-alerts)
 - [Performance and multi-camera limits](#performance-and-multi-camera-limits)
-- [Configuration](#configuration)
-- [HTTP API](#http-api)
 - [Data and storage](#data-and-storage)
 - [Test footage](#test-footage)
 - [Deployment](#deployment)
@@ -53,6 +52,26 @@ built to be watched in a control room.
 
 Everything is a single Python service with no external database, no message broker and no
 cloud dependency — it runs on a laptop, a small VM, or a GPU box.
+
+---
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| **Language / runtime** | Python 3.11 |
+| **API & server** | FastAPI, Uvicorn |
+| **Person detection** | Ultralytics YOLO26 (default), RT-DETR optional; OpenCV for decode/render |
+| **Tracking** | Supervision ByteTrack |
+| **Dense counting** | PET (head points) and DM-Count (density maps) under `backend/services/dense` |
+| **Deep learning** | PyTorch — CUDA on GPU hosts, CPU otherwise |
+| **Dashboard** | Static HTML / CSS / JS (MJPEG streams + WebSocket snapshots) |
+| **Local state** | SQLite alerts DB + `cameras.json` |
+| **Optional archive** | MongoDB Atlas mirror |
+| **Packaging** | Docker Compose (CPU or NVIDIA GPU images) |
+
+Environment variables, detector switches and deployment knobs live in
+[`.env.example`](.env.example) and [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ---
 
@@ -217,10 +236,10 @@ CROWD_PET_CORRECTION=1              # opt in to the count correction
 
 If a checkpoint is missing or altered the estimators report `available: false`
 with the reason, an audit row is written, and the detector path keeps running.
-The section-by-section audit of the full plan is in
-[docs/PLAN_STATUS.md](docs/PLAN_STATUS.md).
 
----## Choosing a detector model
+---
+
+## Choosing a detector model
 
 Four families are registered. The **Engine** panel has a picker, `.env` can pin a
 default (`CROWD_MODEL`), and `PUT /api/models` switches at runtime: the
@@ -387,21 +406,20 @@ density model next to the detector rather than trusting counts alone.
 
 ## Production architecture (implemented)
 
-The plan in [docs/improvement.md](docs/improvement.md) is no longer only a plan. The
-pieces below exist in the code, are covered by tests (`tests/test_architecture.py`) and
-run on the GPU deployment.
+These pieces exist in the code, are covered by tests (`tests/test_architecture.py`),
+and run on the GPU deployment.
 
 | Capability | Where | What it actually does |
 |---|---|---|
-| **Detector adapter boundary** | `app/adapters.py` | Every backend returns one `DetectionResult`; the pipeline never touches Ultralytics objects. `UltralyticsDetector` also serves Ultralytics-exported `.onnx` weights. |
-| **Licence-aware model registry** | `app/detector.py`, `GET /api/models` | Name, backend, version, **licence**, expected VRAM, warm state per model. Hot swap loads and warms the replacement first, keeps the old model on failure, and writes an audit entry. |
-| **Tiled inference** | `app/tiling.py` | 3×3 overlapping tiles with cross-tile NMS, gated on *median box height* so compute is only spent where people are small. Measured on the packed-gate clip: **6.8 → 31.0 (2×2) → 61.8 (3×3) people**, 7.3 → 20.6 → 26.5 ms. |
-| **Mode router** | `app/router.py` | `sparse`/`moderate` → detector count is operational; `dense`/`unknown` → `ANALYTICS_DEGRADED`, `selected_count: null`, density shown separately as advisory. Hysteresis on recovery, immediate on loss of trust. |
-| **Density companion** | `app/adapters.py` | `DensityEstimator` interface + TorchScript (DM-Count-style) adapter. Default is an explicit `density-unavailable` state — never an invented number. Advisory until a per-camera validation gate is signed off. |
-| **Durable alert outbox** | `app/outbox.py`, `app/store.py` | Alerts are persisted before delivery, retried with exponential backoff + jitter, dead-lettered, deduplicated on the alert id, and can be acknowledged/escalated. Survives restarts. |
-| **Fair scheduler** | `app/scheduler.py` | One pending request per camera (drop-oldest), round-robin dispatch, micro-batching, and a **frame-age budget** (`CROWD_MAX_FRAME_AGE_MS`) that drops stale frames instead of analysing them. No inline inference on camera threads. |
-| **Analytics health** | `app/analytics.py` | Dead-man switch per camera: no inference, count collapse on a healthy stream, and count drift against the previous window all become `degraded` rather than a comfortable zero. |
-| **Geometry versioning & audit** | `app/pipeline.py`, `app/store.py` | Zone edits bump `zones_version`; calibration is versioned and attributed. Every alert records the zone version, calibration version, model version and estimation mode it fired under. |
+| **Detector adapter boundary** | `backend/app/adapters.py` | Every backend returns one `DetectionResult`; the pipeline never touches Ultralytics objects. `UltralyticsDetector` also serves Ultralytics-exported `.onnx` weights. |
+| **Licence-aware model registry** | `backend/app/detector.py`, `GET /api/models` | Name, backend, version, **licence**, expected VRAM, warm state per model. Hot swap loads and warms the replacement first, keeps the old model on failure, and writes an audit entry. |
+| **Tiled inference** | `backend/app/tiling.py` | 3×3 overlapping tiles with cross-tile NMS, gated on *median box height* so compute is only spent where people are small. Measured on the packed-gate clip: **6.8 → 31.0 (2×2) → 61.8 (3×3) people**, 7.3 → 20.6 → 26.5 ms. |
+| **Mode router** | `backend/app/router.py` | `sparse`/`moderate` → detector count is operational; `dense`/`unknown` → `ANALYTICS_DEGRADED`, `selected_count: null`, density shown separately as advisory. Hysteresis on recovery, immediate on loss of trust. |
+| **Density companion** | `backend/app/adapters.py`, `backend/app/dense.py` | PET / DM-Count dense estimators. Default is an explicit unavailable state — never an invented number. Advisory until a per-camera validation gate is signed off. |
+| **Durable alert outbox** | `backend/app/outbox.py`, `backend/app/store.py` | Alerts are persisted before delivery, retried with exponential backoff + jitter, dead-lettered, deduplicated on the alert id, and can be acknowledged/escalated. Survives restarts. |
+| **Fair scheduler** | `backend/app/scheduler.py` | One pending request per camera (drop-oldest), round-robin dispatch, micro-batching, and a **frame-age budget** (`CROWD_MAX_FRAME_AGE_MS`) that drops stale frames instead of analysing them. No inline inference on camera threads. |
+| **Analytics health** | `backend/app/analytics.py` | Dead-man switch per camera: no inference, count collapse on a healthy stream, and count drift against the previous window all become `degraded` rather than a comfortable zero. |
+| **Geometry versioning & audit** | `backend/app/pipeline.py`, `backend/app/store.py` | Zone edits bump `zones_version`; calibration is versioned and attributed. Every alert records the zone version, calibration version, model version and estimation mode it fired under. |
 | **Throughput** | `app/pipeline.py` | People-per-minute in/out per virtual line — the number that predicts a surge, not just instantaneous head-count. |
 
 ### When the detector cannot see the crowd
@@ -450,114 +468,6 @@ Benchmark any model/tiling combination on the same clips:
 python backend/tools/bench_models.py --clips samples/a.mp4 samples/b.mp4 \
     --models yolo26n.pt --tiling off,2x2,3x3 --frames 30
 ```
-
-## Configuration
-
-Every setting is an environment variable; nothing needs editing in code.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `CROWD_MODEL` | *(by device)* | Pin the detector: `rtdetr-l.pt` on CUDA, `yolo26n.pt` on CPU |
-| `CROWD_MODEL_CHOICES` | all registered | Comma list that narrows or extends what the picker offers |
-| `CROWD_AUTH_OPERATOR_TOKEN` | empty | Enables API auth; required for every mutating request |
-| `CROWD_AUTH_VIEWER_TOKEN` | empty | Read-only token for dashboards and scripts |
-| `CROWD_CONF` | `0.30` | Detection confidence threshold |
-| `CROWD_IMGSZ` | `640` | Inference resolution — 960–1280 for wide/aerial views with tiny people |
-| `CROWD_TARGET_INFER_FPS` | `5` | Inference rate per camera |
-| `CROWD_MAX_FRAME_WIDTH` | `1280` | Frames are downscaled to this width before detection |
-| `CROWD_JPEG_QUALITY` | `65` | Quality of the annotated stream |
-| `CROWD_STREAM_FPS` | `12` | MJPEG stream frame rate |
-| `CROWD_WS_PERIOD` | `0.6` | Seconds between dashboard snapshots |
-| `CROWD_FRAME_STALE_S` | `8` | Seconds before a camera is considered stale |
-| `CROWD_FROZEN_FRAME_S` | `10` | Seconds of unchanged pixels before frozen status |
-| `CROWD_DECODER` | `auto` | Decoder backend: auto, opencv, ffmpeg, gstreamer or nvdec |
-| `CROWD_BATCH_SIZE` | `1` | Maximum inference micro-batch size |
-| `CROWD_MAX_BATCH_WAIT_MS` | `8` | Maximum scheduler wait before dispatching a batch |
-| `CROWD_MAX_FRAME_AGE_MS` | `500` | Frames older than this are dropped, not analysed |
-| `CROWD_DETAIL_PASS` | `1` | Two-tier detail escalation for tiny people |
-| `CROWD_DETAIL_PROBE_BELOW` | `6` | Probe when the full-frame pass finds this few |
-| `CROWD_DETAIL_IMGSZ` / `CROWD_DETAIL_GRID` | `1280` / `3` | High-resolution detail pass |
-| `CROWD_DETAIL_EXIT_BELOW` / `_EXIT_FRAMES` | `3` / `10` | Hysteresis before leaving detail mode |
-| `CROWD_TILING` | `auto` | Gated tiled inference: `auto` or `off` |
-| `CROWD_TILE_ROWS` / `CROWD_TILE_COLS` | `3` / `3` | Tile grid when tiling engages |
-| `CROWD_TILE_MIN_BOX_HEIGHT_PX` | `40` | Tile only when median person height is below this |
-| `CROWD_MODE_ROUTER` | `1` | Enable the sparse/dense/degraded estimation router |
-| `CROWD_DENSE_BOX_HEIGHT_PX` | `32` | Small-box threshold that marks a scene dense |
-| `CROWD_DENSITY_MODEL` | empty | TorchScript density checkpoint (advisory only) |
-| `CROWD_DENSITY_VALIDATED` | `0` | Set only after a signed per-camera validation gate |
-| `CROWD_POINT_BACKEND` | empty | Set to `dense` to enable PET head-point estimates |
-| `CROWD_DENSITY_BACKEND` | empty | Set to `dense` to enable DM-Count density estimates |
-| `CROWD_POINT_MODEL_VALIDATED` | `0` | Enables a validated PET checkpoint for a camera promotion gate |
-| `CROWD_POINT_PERIOD_S` / `CROWD_DENSITY_PERIOD_S` | `1.5` / `1.5` | Rate limit for independent dense-model inference |
-| `CROWD_VALIDATION_MIN_SAMPLES` | `20` | Hand-counted samples required before a per-camera promotion |
-| `CROWD_VALIDATION_MAX_MAPE` | `0.20` | Maximum average percentage error accepted by the promotion gate |
-| `CROWD_VALIDATION_TTL_DAYS` | `30` | Promotion expiry; revalidate before it can select dense counts |
-| `CROWD_FRAME_QUEUE_SIZE` | `2` | Bounded inference queue size |
-| `CROWD_LOOP` | `1` | Loop file sources |
-| `CROWD_WARN_PCT` | `75` | Zone warning level (% of capacity) |
-| `CROWD_ZONE_CAPACITY` | `100` | Capacity given to auto-created zones |
-| `CROWD_ALERT_SUSTAIN` | `5` | Seconds at ≥100 % before a capacity alert |
-| `CROWD_ALERT_COOLDOWN` | `60` | Minimum seconds between repeat alerts for one zone |
-| `ALERT_WEBHOOK_URL` | empty | Optional JSON webhook for alert delivery |
-| `ALERT_WEBHOOK_SECRET` | empty | Optional HMAC-SHA256 signing secret |
-| `ALERT_WEBHOOK_RETRIES` | `3` | Webhook delivery attempts |
-| `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address (`0.0.0.0` inside Docker) |
-| `CROWD_DATA_DIR` | `./data` | `cameras.json`, `crowd.db` (dev scripts and Docker point this at `.data/data`) |
-| `CROWD_UPLOADS_DIR` | `./uploads` | Uploaded clips |
-| `CROWD_SAMPLES_DIR` | `./samples` | Sample library (subfolders become picker groups) |
-| `MONGODB_URL` | empty | Optional MongoDB Atlas URI; loaded from root `.env` |
-| `MONGODB_DB_NAME` | `godavari` | MongoDB database used for the best-effort archive |
-
----
-
-## HTTP API
-
-Everything the dashboard does is available over HTTP, so an operations script or an existing
-NOC dashboard can drive it.
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/api/cameras` | All cameras with live metrics |
-| `POST` | `/api/cameras` | Add one: multipart `file=`, or form `sample=` / `source=`, plus `name=`, `loop=` |
-| `GET` | `/api/cameras/{id}` | One camera |
-| `GET` | `/api/cameras/{id}/diagnostics` | Camera health, decoder and timing diagnostics |
-| `DELETE` | `/api/cameras/{id}` | Stop and remove; delete an unshared uploaded video |
-| `PUT` | `/api/cameras/{id}/zones` | Replace areas: `{"zones":[{name, polygon, capacity, warn_pct}]}` (bumps `zones_version`) |
-| `PUT` | `/api/cameras/{id}/count-lines` | Replace gate lines: `{"lines":[{name, a, b, entry_side}]}` |
-| `PUT` | `/api/cameras/{id}/display` | Bake detection boxes into the stream or not: `{"detections": true}` |
-| `GET` | `/api/cameras/{id}/stream` | Annotated MJPEG stream; add `?raw=1` for the same frames without boxes |
-| `GET` | `/api/cameras/{id}/snapshot` | Single annotated JPEG |
-| `GET` | `/api/samples` | Available sample clips (subfolder clips as `dir/name`) |
-| `GET` | `/api/alerts?limit=100` | Persisted alert history |
-| `GET` | `/api/alerts/export` | Alert history as CSV |
-| `GET` | `/api/system` | Model, device, torch/CUDA, uptime, counters |
-| `GET` | `/api/health` | Service and camera health summary |
-| `GET` | `/metrics` | Prometheus-compatible process metrics |
-| `GET` | `/api/models` | Model registry: licence, backend, version, warm state |
-| `GET` | `/api/models/{name}/status` | One model's load/warm state |
-| `PUT` | `/api/models` | Hot-swap a model (warm first, audit-logged) |
-| `POST` | `/api/alerts/{id}/ack` | Acknowledge an alert (`{"by": "..."}`) |
-| `POST` | `/api/alerts/{id}/close` | Close an alert with operator attribution after review |
-| `GET` | `/api/alerts/{id}/evidence` | Retrieve the alert-time JPEG frame when evidence capture succeeded |
-| `POST` | `/api/alerts/{id}/escalate` | Escalate an unacknowledged alert |
-| `GET` | `/api/outbox` | Durable delivery queue state |
-| `GET` | `/api/audit` | Model, zone and calibration change trail |
-| `GET` | `/api/analytics/health` | Per-camera analytics dead-man / drift state |
-| `PUT` | `/api/cameras/{id}/calibration` | Save versioned ground-plane calibration points |
-| `PUT` | `/api/cameras/{id}/profile` | Set a persistent per-camera `global`, `balanced`, `dense`, or `custom` detector profile |
-| `GET` | `/api/cameras/{id}/estimation-policy` | Per-camera dense-estimate validation and promotion status |
-| `POST` | `/api/cameras/{id}/validation-samples` | Record a manual count and independent model count for PET or DM-Count |
-| `PUT` | `/api/cameras/{id}/estimation-policy` | Promote (`head_point` / `density`) or revoke (`none`) a validated dense estimate |
-| `WS` | `/ws` | Full snapshot (cameras + alerts + system) at `CROWD_WS_PERIOD` |
-
-```bash
-# add a sample camera and give it two zones
-curl -X POST localhost:8000/api/cameras -F sample=pilgrim/tawaf_4k_walk.mp4 -F name=Tawaf
-curl -X PUT localhost:8000/api/cameras/<id>/zones -H 'content-type: application/json' \
-  -d '{"zones":[{"name":"Gate A","capacity":3,"polygon":[[0.02,0.52],[0.48,0.52],[0.48,0.99],[0.02,0.99]]}]}'
-```
-
----
 
 ## Data and storage
 
