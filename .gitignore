@@ -1,4 +1,3 @@
-*.pt
 .venv/
 .env
 .data/
@@ -15,4 +14,3 @@ samples/*.mkv
 samples/*.webm
 *.pyc
 .DS_Store
-models/*.pth
