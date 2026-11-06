@@ -8,9 +8,13 @@ alerts. Every backend therefore returns the same frozen dataclass.
 from __future__ import annotations
 
 import abc
+import importlib
+import importlib.util
+import os
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -81,6 +85,29 @@ class DensityResult:
     density_map: np.ndarray | None = None
 
 
+@dataclass(frozen=True)
+class PointResult:
+    """Head-point estimate in original-frame ``(x, y)`` pixel coordinates.
+
+    Point models intentionally have a separate contract from box detectors:
+    points support occupancy and calibrated density in occluded crowds, but do
+    not imply an identity that can be followed between frames.
+    """
+    points: np.ndarray              # (n, 2), x/y pixels in the source frame
+    raw_count: int
+    corrected_count: float | None
+    zone_counts: dict
+    confidence: str
+    inference_ms: float
+    model_name: str
+    model_version: str
+
+    @property
+    def total_count(self) -> float:
+        return (float(self.corrected_count) if self.corrected_count is not None
+                else float(self.raw_count))
+
+
 # --------------------------------------------------------------------------- #
 # Model metadata / licence registry
 # --------------------------------------------------------------------------- #
@@ -95,6 +122,9 @@ class ModelSpec:
     expected_vram_mb: int = 0
     commercial_use: bool = True
     notes: str = ""
+    # Optional Python package this family needs at runtime. Empty means the
+    # weights run on the dependencies the service already ships.
+    requires: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -107,6 +137,7 @@ class ModelSpec:
             "expected_vram_mb": self.expected_vram_mb,
             "commercial_use": self.commercial_use,
             "notes": self.notes,
+            "requires": self.requires,
         }
 
 
@@ -130,7 +161,49 @@ KNOWN_MODELS: dict[str, ModelSpec] = {
                             imgsz=960, expected_vram_mb=1800,
                             commercial_use=False,
                             notes="Accuracy reference for benchmarking"),
+    # --- RT-DETR (Apache-2.0): transformer decoder, no NMS ----------------
+    "rtdetr-l.pt": ModelSpec("rtdetr-l.pt", "rtdetr", "rtdetr-l", "Apache-2.0",
+                             imgsz=640, expected_vram_mb=2200, commercial_use=True,
+                             notes="DETR decoder without NMS; better on overlapping "
+                                   "people, ~2-3x the compute of YOLO26n"),
+    "rtdetr-x.pt": ModelSpec("rtdetr-x.pt", "rtdetr", "rtdetr-x", "Apache-2.0",
+                             imgsz=640, expected_vram_mb=3200, commercial_use=True,
+                             notes="Largest RT-DETR; accuracy reference"),
+    # --- RF-DETR (Apache-2.0), optional `rfdetr` package -------------------
+    "rf-detr-base.pth": ModelSpec("rf-detr-base.pth", "rfdetr", "rf-detr-base",
+                                  "Apache-2.0", imgsz=640, expected_vram_mb=2600,
+                                  commercial_use=True, requires="rfdetr",
+                                  notes="DINOv2 backbone; `pip install rfdetr`"),
+    "rf-detr-large.pth": ModelSpec("rf-detr-large.pth", "rfdetr", "rf-detr-large",
+                                   "Apache-2.0", imgsz=640, expected_vram_mb=4200,
+                                   commercial_use=True, requires="rfdetr",
+                                   notes="DINOv2 backbone; more accurate, slower"),
+    # --- D-FINE (Apache-2.0), optional `dfine` package ---------------------
+    "dfine_m_coco.pt": ModelSpec("dfine_m_coco.pt", "dfine", "dfine-m", "Apache-2.0",
+                                 imgsz=640, expected_vram_mb=1800,
+                                 commercial_use=True, requires="dfine",
+                                 notes="D-FINE medium; needs the `dfine` package"),
+    "dfine_l_coco.pt": ModelSpec("dfine_l_coco.pt", "dfine", "dfine-l", "Apache-2.0",
+                                 imgsz=640, expected_vram_mb=2400,
+                                 commercial_use=True, requires="dfine",
+                                 notes="D-FINE large; needs the `dfine` package"),
 }
+
+
+def model_available(name: str) -> bool:
+    """True when this model's backend dependencies are importable.
+
+    Weights for the Ultralytics families download on first load, so they are
+    available wherever the service runs; RF-DETR and D-FINE live in separate
+    packages and must be installed before the picker offers them.
+    """
+    requires = spec_for(name).requires
+    if not requires:
+        return True
+    try:
+        return importlib.util.find_spec(requires) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def spec_for(name: str, imgsz: int | None = None) -> ModelSpec:
@@ -143,7 +216,7 @@ def spec_for(name: str, imgsz: int | None = None) -> ModelSpec:
     if imgsz and imgsz != spec.imgsz:
         return ModelSpec(spec.name, spec.backend, spec.version, spec.license,
                          spec.task, imgsz, spec.expected_vram_mb,
-                         spec.commercial_use, spec.notes)
+                         spec.commercial_use, spec.notes, spec.requires)
     return spec
 
 
@@ -255,6 +328,230 @@ class UltralyticsDetector(DetectorAdapter):
                      "model": self.name, "backend": self.backend,
                      "detector": "ultralytics"})
         return base
+class RTDETRDetector(UltralyticsDetector):
+    """RT-DETR through Ultralytics.
+
+    Same adapter surface as YOLO, but the DETR family's decoder needs no NMS,
+    and its weights are Apache-2.0 - the non-YOLO option that does not change
+    the service's dependency set.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.backend = "rtdetr"
+
+    def load(self):
+        from ultralytics import RTDETR
+
+        with self._lock:
+            self._model = RTDETR(self.name)
+        return self
+
+
+_RFDETR_CLASSES = {
+    "nano": "RFDETRNano",
+    "small": "RFDETRSmall",
+    "medium": "RFDETRMedium",
+    "base": "RFDETRBase",
+    "large": "RFDETRLarge",
+    "2xlarge": "RFDETR2XLarge",
+}
+
+
+def _convert_detections(det, frame: np.ndarray, per_frame_ms: float,
+                        name: str, version: str) -> DetectionResult:
+    """Map a supervision-style Detections object onto DetectionResult."""
+    boxes = getattr(det, "xyxy", None)
+    boxes = (np.zeros((0, 4), np.float32) if boxes is None
+             else np.asarray(boxes, np.float32).reshape(-1, 4))
+    count = len(boxes)
+    confs = getattr(det, "confidence", None)
+    confs = (np.zeros(count, np.float32) if confs is None
+             else np.asarray(confs, np.float32).reshape(-1))
+    classes = getattr(det, "class_id", None)
+    classes = (np.zeros(count, np.int32) if classes is None
+               else np.asarray(classes, np.int32).reshape(-1))
+    # COCO index 0 is "person" for every COCO-pretrained checkpoint here.
+    keep = classes == PERSON_CLASS
+    h, w = frame.shape[:2]
+    return DetectionResult(boxes[keep], confs[keep], classes[keep], per_frame_ms,
+                           name, version, (w, h))
+
+
+class RFDetrDetector(DetectorAdapter):
+    """RF-DETR (Roboflow, Apache-2.0) through the optional ``rfdetr`` package.
+
+    Weights are the COCO checkpoints (``rf-detr-base.pth`` and friends); a local
+    file is passed as ``pretrain_weights``, otherwise the package downloads its
+    own. Everything below is lazy, so a deployment without the package simply
+    reports ``available: false`` instead of failing to start.
+    """
+
+    backend = "rfdetr"
+
+    def __init__(self, name: str, conf: float = 0.30, imgsz: int = 640,
+                 device=None, half: bool = False):
+        self.name = name
+        self.conf = conf
+        self.imgsz = imgsz
+        self.device = device
+        self.half = half
+        self._model = None
+        self._lock = threading.RLock()
+        self._spec = spec_for(name, imgsz)
+
+    def load(self):
+        try:
+            import rfdetr
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "RF-DETR is not installed; run `pip install rfdetr` "
+                "(Apache-2.0 code and weights) and switch again") from exc
+        variant = Path(self.name).stem.split("-")[-1].lower()
+        factory = getattr(rfdetr, _RFDETR_CLASSES.get(variant, "RFDETRBase"))
+        kwargs = {}
+        if os.path.isfile(self.name):
+            kwargs["pretrain_weights"] = self.name
+        with self._lock:
+            self._model = factory(**kwargs)
+        return self
+
+    @property
+    def spec(self) -> ModelSpec:
+        return self._spec
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def set_profile(self, conf: float | None = None, imgsz: int | None = None):
+        with self._lock:
+            if conf is not None:
+                self.conf = float(conf)
+            if imgsz is not None:
+                self.imgsz = int(imgsz)
+
+    def detect_batch(self, frames: list[np.ndarray], *,
+                     imgsz: int | None = None,
+                     camera_ids: list[str] | None = None,
+                     ) -> list[DetectionResult]:
+        if self._model is None:
+            raise RuntimeError("detector not loaded")
+        started = time.perf_counter()
+        with self._lock:
+            raw = self._model.predict([np.asarray(f) for f in frames],
+                                      threshold=self.conf)
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        results = list(raw) if isinstance(raw, (list, tuple)) else [raw] * len(frames)
+        per_frame = elapsed_ms / max(1, len(frames))
+        metrics.inc("godavari_inference_batches_total")
+        metrics.inc("godavari_inference_frames_total", len(frames))
+        metrics.inc("godavari_inference_seconds_total", elapsed_ms / 1000.0)
+        return [_convert_detections(det, frames[i], per_frame,
+                                    self.name, self._spec.version)
+                for i, det in enumerate(results)]
+
+    def info(self) -> dict:
+        base = self._spec.to_dict()
+        base.update({"loaded": self.loaded, "conf": self.conf,
+                     "model": self.name, "backend": self.backend,
+                     "detector": "rfdetr"})
+        return base
+
+
+class DFineDetector(DetectorAdapter):
+    """D-FINE (Apache-2.0) through the optional ``dfine`` package.
+
+    Upstream D-FINE has no stable pip inference entry point (its repository
+    drives inference through ``engine.core.YAMLConfig``), so this adapter calls
+    ``dfine.load_model(checkpoint, device=...)`` when the installed package
+    exposes it and otherwise fails with an actionable message. A failed load
+    never replaces the active model - the manager keeps the previous one.
+    """
+
+    backend = "dfine"
+
+    def __init__(self, name: str, conf: float = 0.30, imgsz: int = 640,
+                 device=None, half: bool = False):
+        self.name = name
+        self.conf = conf
+        self.imgsz = imgsz
+        self.device = device
+        self.half = half
+        self._model = None
+        self._lock = threading.RLock()
+        self._spec = spec_for(name, imgsz)
+
+    def load(self):
+        try:
+            import dfine
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "D-FINE is not installed; install the `dfine` package or put "
+                "Peterande/D-FINE on PYTHONPATH, then switch again") from exc
+        loader = getattr(dfine, "load_model", None)
+        if not callable(loader):
+            raise RuntimeError(
+                "the installed dfine package exposes no load_model(checkpoint); "
+                "see docs/DETECTORS.md for the supported entry points")
+        with self._lock:
+            self._model = loader(self.name, device=self.device)
+        return self
+
+    @property
+    def spec(self) -> ModelSpec:
+        return self._spec
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def set_profile(self, conf: float | None = None, imgsz: int | None = None):
+        with self._lock:
+            if conf is not None:
+                self.conf = float(conf)
+            if imgsz is not None:
+                self.imgsz = int(imgsz)
+
+    def detect_batch(self, frames: list[np.ndarray], *,
+                     imgsz: int | None = None,
+                     camera_ids: list[str] | None = None,
+                     ) -> list[DetectionResult]:
+        if self._model is None:
+            raise RuntimeError("detector not loaded")
+        started = time.perf_counter()
+        with self._lock:
+            raw = self._model.predict([np.asarray(f) for f in frames])
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        results = list(raw) if isinstance(raw, (list, tuple)) else [raw] * len(frames)
+        per_frame = elapsed_ms / max(1, len(frames))
+        return [_convert_detections(det, frames[i], per_frame,
+                                    self.name, self._spec.version)
+                for i, det in enumerate(results)]
+
+    def info(self) -> dict:
+        base = self._spec.to_dict()
+        base.update({"loaded": self.loaded, "conf": self.conf,
+                     "model": self.name, "backend": self.backend,
+                     "detector": "dfine"})
+        return base
+
+
+def build_detector(name: str, conf: float = 0.30, imgsz: int = 640,
+                   device=None, half: bool = False) -> DetectorAdapter:
+    """Pick the adapter class for a registered model name.
+
+    The registry says which family a checkpoint belongs to; this function is the
+    only place that maps a family onto an implementation.
+    """
+    spec = spec_for(name, imgsz)
+    if spec.backend == "rtdetr":
+        return RTDETRDetector(name, conf=conf, imgsz=imgsz, device=device, half=half)
+    if spec.backend == "rfdetr":
+        return RFDetrDetector(name, conf=conf, imgsz=imgsz, device=device, half=half)
+    if spec.backend == "dfine":
+        return DFineDetector(name, conf=conf, imgsz=imgsz, device=device, half=half)
+    return UltralyticsDetector(name, conf=conf, imgsz=imgsz, device=device, half=half)
 
 
 def merge_tiled(tile_results: list[DetectionResult], tile_rects: list,
@@ -348,6 +645,141 @@ class DensityEstimator(abc.ABC):
                 "validated": self.validated, "available": True}
 
 
+class PointEstimator(abc.ABC):
+    """Head-point estimation boundary used by dense-scene routing."""
+
+    name = "none"
+    version = "0"
+    validated = False
+
+    @abc.abstractmethod
+    def estimate(self, frame: np.ndarray, zone_masks: list | None = None) -> PointResult: ...
+
+    def info(self) -> dict:
+        return {"name": self.name, "version": self.version,
+                "validated": self.validated, "available": True}
+
+
+class NullPointEstimator(PointEstimator):
+    """An explicit unavailable state; absence must never resemble zero heads."""
+
+    name = "head-points-unavailable"
+    version = "0"
+    validated = False
+
+    def estimate(self, frame: np.ndarray, zone_masks: list | None = None) -> PointResult:
+        raise RuntimeError("no head-point model configured")
+
+    def info(self) -> dict:
+        return {"name": self.name, "version": self.version, "validated": False,
+                "available": False,
+                "note": "Set CROWD_POINT_BACKEND=crowdshield after installing Crowd Shield"}
+
+
+def _point_zone_counts(points: np.ndarray, zone_masks: list | None,
+                       frame_shape: tuple[int, int]) -> dict:
+    """Count source-frame points inside normalised dashboard zone polygons."""
+    if not zone_masks:
+        return {}
+    import cv2
+
+    h, w = frame_shape
+    counts: dict = {}
+    for zone in zone_masks:
+        key = zone.get("id", zone.get("name", "zone"))
+        polygon = np.asarray(zone.get("polygon", []), dtype=np.float32)
+        if len(polygon) < 3:
+            counts[key] = 0
+            continue
+        polygon *= np.array([w, h], dtype=np.float32)
+        counts[key] = sum(
+            cv2.pointPolygonTest(polygon, (float(x), float(y)), False) >= 0
+            for x, y in points
+        )
+    return counts
+
+
+class CrowdShieldPointEstimator(PointEstimator):
+    """Adapter for Crowd Shield's PET ``count_points`` integration.
+
+    Crowd Shield owns the PET network definition and checkpoint loading.  This
+    adapter imports its documented public API only, which keeps this app free
+    from checkpoint-specific model code and preserves the original BGR input
+    and point-coordinate convention.
+    """
+
+    name = "crowdshield-pet"
+    version = "pet-shab-vgg16bn"
+
+    def __init__(self, validated: bool = False):
+        # app/crowd_shield.py pins the vendored definitions to models/pet_shab.pth
+        # and verifies its checksum before anything is loaded.
+        from . import crowd_shield
+
+        self._count_points = crowd_shield.count_points
+        self.validated = validated
+        self._lock = threading.Lock()
+
+    def estimate(self, frame: np.ndarray, zone_masks: list | None = None) -> PointResult:
+        h, w = frame.shape[:2]
+        started = time.perf_counter()
+        with self._lock:
+            result = self._count_points(frame)
+        if not isinstance(result, dict):
+            raise RuntimeError("Crowd Shield PET returned an unsupported result")
+        raw_points = np.asarray(result.get("points", []), dtype=np.float32).reshape(-1, 2)
+        # Crowd Shield documents points as (row, column); Godavari uses x/y.
+        points = raw_points[:, ::-1] if len(raw_points) else raw_points
+        raw_count = int(result.get("raw_count", len(points)))
+        corrected = result.get("count")
+        if corrected is not None:
+            corrected = float(corrected)
+            # A count equal to the raw points carries no correction; keep
+            # corrected_count null so nothing looks calibrated by accident.
+            if abs(corrected - raw_count) < 1e-9:
+                corrected = None
+        return PointResult(
+            points=points, raw_count=raw_count, corrected_count=corrected,
+            zone_counts=_point_zone_counts(points, zone_masks, (h, w)),
+            confidence="validated" if self.validated else "advisory",
+            inference_ms=(time.perf_counter() - started) * 1000.0,
+            model_name=self.name, model_version=self.version,
+        )
+
+
+class CrowdShieldDensityEstimator(DensityEstimator):
+    """Adapter for Crowd Shield's documented DM-Count inference function."""
+
+    name = "crowdshield-dm-count"
+    version = "dmcount-shab-vgg19"
+
+    def __init__(self, validated: bool = False):
+        from . import crowd_shield
+
+        self._estimate_density = crowd_shield.estimate_density
+        self.validated = validated
+        self._lock = threading.Lock()
+
+    def estimate(self, frame: np.ndarray, zone_masks: list | None = None) -> DensityResult:
+        started = time.perf_counter()
+        with self._lock:
+            result = self._estimate_density(frame)
+        if not isinstance(result, dict) or result.get("count") is None:
+            raise RuntimeError("Crowd Shield DM-Count returned no count")
+        # Crowd Shield returns the map under "density"; accept the older key too.
+        density_map = result.get("density", result.get("density_map"))
+        density_map = (np.asarray(density_map, dtype=np.float32)
+                       if density_map is not None else None)
+        return DensityResult(
+            total_count=float(result["count"]),
+            zone_counts=_density_zone_counts(density_map, zone_masks),
+            confidence="validated" if self.validated else "advisory",
+            inference_ms=(time.perf_counter() - started) * 1000.0,
+            model_name=self.name, model_version=self.version,
+            density_map=density_map,
+        )
+
+
 class NullDensityEstimator(DensityEstimator):
     """Explicit "no density model installed" state.
 
@@ -366,6 +798,33 @@ class NullDensityEstimator(DensityEstimator):
         return {"name": self.name, "version": self.version, "validated": False,
                 "available": False,
                 "note": "Set CROWD_DENSITY_MODEL to a cleared checkpoint to enable"}
+
+
+def _density_zone_counts(density_map: np.ndarray | None,
+                         zone_masks: list | None) -> dict:
+    """Integrate density-map cells inside normalised camera zones.
+
+    A density map's sum represents people, so zone values are calculated from
+    the map directly.  This avoids the common but incorrect image-area scaling
+    that makes a count change when the input is resized.
+    """
+    if density_map is None or density_map.ndim != 2 or not zone_masks:
+        return {}
+    import cv2
+
+    h, w = density_map.shape
+    counts: dict = {}
+    for zone in zone_masks:
+        key = zone.get("id", zone.get("name", "zone"))
+        polygon = np.asarray(zone.get("polygon", []), dtype=np.float32)
+        if len(polygon) < 3:
+            counts[key] = 0.0
+            continue
+        polygon *= np.array([w, h], dtype=np.float32)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [polygon.astype(np.int32)], 1)
+        counts[key] = float(density_map[mask.astype(bool)].sum())
+    return counts
 
 
 class TorchscriptDensityEstimator(DensityEstimator):
@@ -399,10 +858,10 @@ class TorchscriptDensityEstimator(DensityEstimator):
         tensor = (self._torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0)[None]
         with self._lock, self._torch.no_grad():
             density = self._module(tensor)[0, 0].cpu().numpy()
-        total = float(density.sum()) * (h * w) / (self.input_size ** 2)
-        zone_counts = {}
-        for mask in zone_masks or []:
-            zone_counts[mask.get("id", mask.get("name", "zone"))] = None  # needs calibration
+        # Density-map units are people per output cell.  Resizing its input
+        # changes the grid resolution but must not multiply the total people.
+        total = float(density.sum())
+        zone_counts = _density_zone_counts(density, zone_masks)
         return DensityResult(total, zone_counts,
                              "advisory" if not self.validated else "validated",
                              (time.perf_counter() - started) * 1000.0,

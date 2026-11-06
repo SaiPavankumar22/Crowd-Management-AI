@@ -16,16 +16,23 @@ import time
 import numpy as np
 import torch
 
-from . import config, metrics, store
+from . import config, store
 from .adapters import (DetectionResult, ModelSpec, TiledDetector,
-                       UltralyticsDetector, spec_for)
+                       build_detector, model_available, spec_for)
 from .detail import DetailPass
 from .tiling import TilingPolicy
 
 
 class ModelManager:
     def __init__(self, model_name: str, fallbacks: list, conf: float, imgsz: int):
+        # Empty means "use the configured default", which is YOLO26n; the manager
+        # never guesses a family from the hardware.
+        model_name = model_name or config.MODEL_NAME or "yolo26n.pt"
         self.requested = [model_name] + [m for m in fallbacks if m != model_name]
+        # Everything registered is switchable, not only the fallback chain.
+        for choice in getattr(config, "MODEL_CHOICES", []):
+            if choice not in self.requested:
+                self.requested.append(choice)
         self.conf = conf
         self.imgsz = imgsz
         self.default_conf = conf
@@ -53,7 +60,7 @@ class ModelManager:
     # ------------------------------------------------------------------ #
     def _build(self, name: str, conf: float | None = None,
                imgsz: int | None = None):
-        detector = UltralyticsDetector(
+        detector = build_detector(
             name, conf=conf if conf is not None else self.conf,
             imgsz=imgsz if imgsz is not None else self.imgsz,
             device=self.device, half=self.half,
@@ -158,7 +165,6 @@ class ModelManager:
     def switch(self, name: str) -> dict:
         """Load and warm a replacement, then swap it in atomically."""
         with self.lock:
-            previous = self.model
             previous_name = self.name
             try:
                 adapter = self._build(name)
@@ -242,6 +248,7 @@ class ModelManager:
             entry.update({
                 "status": self.status(name),
                 "warm": bool(self.model is not None and name == self.name),
+                "available": model_available(name),
             })
             out.append(entry)
         return out

@@ -50,14 +50,15 @@ class DetailPass(DetectorAdapter):
     tiers, so no extra VRAM is used and no second set of weights is loaded.
     """
 
-    backend = "ultralytics+detail"
-
     def __init__(self, core: DetectorAdapter, *, policy: TilingPolicy | None = None,
                  probe_below: int = 6, probe_imgsz: int = 640, probe_grid: int = 2,
                  detail_imgsz: int = 1280, detail_grid: int = 3,
                  overlap: float = 0.15, idle_probe_every: int = 4,
                  exit_below: int = 3, exit_frames: int = 10):
         self.core = core
+        # Keep the real family in the name: the wrapper must not make RT-DETR
+        # look like a YOLO model in /api/system or the audit trail.
+        self.backend = f"{getattr(core, 'backend', 'unknown')}+detail"
         self.policy = policy or TilingPolicy(enabled=False)
         self.probe_below = int(probe_below)
         self.probe_imgsz = int(probe_imgsz)
@@ -79,9 +80,6 @@ class DetailPass(DetectorAdapter):
     @property
     def inner(self):            # keeps ModelManager.set_profile working
         return self.core
-
-    def set_profile(self, conf: float | None = None, imgsz: int | None = None):
-        self.core.set_profile(conf=conf, imgsz=imgsz)
 
     @property
     def spec(self) -> ModelSpec:
@@ -178,7 +176,6 @@ class DetailPass(DetectorAdapter):
         for frame, base, camera_id in zip(frames, primary, ids):
             # Gated tiling on the ordinary path (same rule as TiledDetector).
             if self.policy.enabled and self.policy.should_tile(base.boxes):
-                started = time.perf_counter()
                 primary_tiled = self._tiled(frame, self.policy.rows,
                                             self.policy.cols, self.core.spec.imgsz)
                 base = DetectionResult(

@@ -52,8 +52,20 @@ def env_bool(name: str, default: bool) -> bool:
 # --- Model -----------------------------------------------------------------
 # YOLO26-nano (Ultralytics, released Jan 2026): NMS-free end-to-end head,
 # small-object aware - the current real-time pick for dense crowd counting.
-MODEL_NAME = os.environ.get("CROWD_MODEL", "yolo26n.pt")
-FALLBACK_MODELS = ["yolo11n.pt", "yolov8n.pt"]
+# YOLO26n stays the default on every device. Measured on the dense sample
+# clips it recovers far more people than RT-DETR (156 vs 36 on the 1080p crowd)
+# because the detail pass is triggered by a near-empty full-frame count. RT-DETR
+# is one switch away and wins on medium-density scenes; see docs/DETECTORS.md.
+MODEL_NAME = os.environ.get("CROWD_MODEL", "yolo26n.pt").strip()
+FALLBACK_MODELS = ["yolo26n.pt", "yolo11n.pt", "yolov8n.pt"]
+# Every family an operator may switch to, in picker order. The first entry of
+# CROWD_MODELS stays the default; CROWD_MODEL_CHOICES can narrow or extend this
+# list per deployment. Unknown names are shown but reported unavailable.
+MODEL_CHOICES = [m.strip() for m in os.environ.get(
+    "CROWD_MODEL_CHOICES",
+    "yolo26n.pt,yolo11n.pt,yolov8n.pt,yolov8x.pt,rtdetr-l.pt,rtdetr-x.pt,"
+    "rf-detr-base.pth,rf-detr-large.pth,dfine_m_coco.pt,dfine_l_coco.pt",
+).split(",") if m.strip()]
 CONF_THRESHOLD = float(os.environ.get("CROWD_CONF", "0.30"))
 IMGSZ = int(os.environ.get("CROWD_IMGSZ", "640"))
 
@@ -121,14 +133,44 @@ MODE_HYSTERESIS_FRAMES = int(os.environ.get("CROWD_MODE_HYSTERESIS_FRAMES", "3")
 # Density output is advisory until an operator signs off a validation gate.
 DENSITY_MODEL = os.environ.get("CROWD_DENSITY_MODEL", "").strip()
 DENSITY_VALIDATED = env_bool("CROWD_DENSITY_VALIDATED", False)
+# Checkpoints for the vendored Crowd Shield models (app/crowd_shield.py).
+MODELS_DIR = _dir("CROWD_MODELS_DIR", os.path.join(BASE_DIR, "models"))
+# PET's ShanghaiTech count correction is fitted on foreign footage; plan.md
+# keeps it off until local validation, so the default is raw head points.
+PET_CORRECTION_ENABLED = env_bool("CROWD_PET_CORRECTION", False)
 DENSITY_PERIOD_S = float(os.environ.get("CROWD_DENSITY_PERIOD_S", "1.5"))
 CALIBRATED_DENSITY_ENABLED = env_bool("CROWD_CALIBRATED_DENSITY", False)
+# Crowd Shield installs a ``crowdshield`` Python package that owns the PET and
+# DM-Count architectures plus their checkpoints.  Keeping it optional means a
+# detector-only node remains reliable when dense-estimation dependencies fail.
+POINT_BACKEND = os.environ.get("CROWD_POINT_BACKEND", "").strip().lower()
+DENSITY_BACKEND = os.environ.get("CROWD_DENSITY_BACKEND", "").strip().lower()
+POINT_MODEL_VALIDATED = env_bool("CROWD_POINT_MODEL_VALIDATED", False)
+POINT_PERIOD_S = float(os.environ.get("CROWD_POINT_PERIOD_S", "1.5"))
+# A promotion needs enough manually checked samples to be meaningful.  These
+# are local operating limits, deliberately configurable per deployment.
+VALIDATION_MIN_SAMPLES = int(os.environ.get("CROWD_VALIDATION_MIN_SAMPLES", "20"))
+VALIDATION_MAX_MAPE = float(os.environ.get("CROWD_VALIDATION_MAX_MAPE", "0.20"))
+VALIDATION_TTL_DAYS = int(os.environ.get("CROWD_VALIDATION_TTL_DAYS", "30"))
 
 # --- Alerts / calibration -------------------------------------------------
+# Optional API authentication. Both empty means the API is open, which is the
+# intended mode for a loopback-only deployment behind a password proxy.
+AUTH_OPERATOR_TOKEN = os.environ.get("CROWD_AUTH_OPERATOR_TOKEN", "").strip()
+AUTH_VIEWER_TOKEN = os.environ.get("CROWD_AUTH_VIEWER_TOKEN", "").strip()
+
 WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
 WEBHOOK_SECRET = os.environ.get("ALERT_WEBHOOK_SECRET", "").strip()
 WEBHOOK_TIMEOUT_S = float(os.environ.get("ALERT_WEBHOOK_TIMEOUT_S", "5"))
 WEBHOOK_RETRIES = int(os.environ.get("ALERT_WEBHOOK_RETRIES", "3"))
+
+# --- Edge -> district (plan §8) -------------------------------------------
+# Empty push URL keeps a node standalone; a district node only needs the secret.
+DISTRICT_NODE_ID = os.environ.get("CROWD_DISTRICT_NODE_ID", "").strip()
+DISTRICT_PUSH_URL = os.environ.get("CROWD_DISTRICT_PUSH_URL", "").strip()
+DISTRICT_SECRET = os.environ.get("CROWD_DISTRICT_SECRET", "").strip()
+DISTRICT_PUSH_PERIOD_S = float(os.environ.get("CROWD_DISTRICT_PUSH_PERIOD_S", "15"))
+DISTRICT_NODE_TTL_S = float(os.environ.get("CROWD_DISTRICT_NODE_TTL_S", "60"))
 CALIBRATION_ENABLED = env_bool("CROWD_CALIBRATION_ENABLED", True)
 
 VIDEO_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".mpg", ".wmv")

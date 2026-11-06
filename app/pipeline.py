@@ -21,7 +21,9 @@ import numpy as np
 import supervision as sv
 
 from . import config, store
-from .adapters import NullDensityEstimator, TorchscriptDensityEstimator
+from .adapters import (CrowdShieldDensityEstimator, CrowdShieldPointEstimator,
+                       NullDensityEstimator, NullPointEstimator,
+                       TorchscriptDensityEstimator)
 from .alerting import AlertEngine
 from .analytics import AnalyticsHealth, AnalyticsHealthConfig
 from .calibration import polygon_area_world
@@ -97,6 +99,9 @@ class CameraWorker(threading.Thread):
         self._density_result = None
         self._density_error: str | None = None
         self._last_density_ts = 0.0
+        self._point_result = None
+        self._point_error: str | None = None
+        self._last_point_ts = 0.0
         self._line_history: deque = deque(maxlen=600)
         self._route: dict = {}
         self._last_detection = None
@@ -180,8 +185,17 @@ class CameraWorker(threading.Thread):
                     self.metrics = {"status": "running", "detail": None}
                 continue
 
-            self.frame_health.frame_received(frame)
+            health_snapshot = self.frame_health.frame_received(frame)
             metrics.inc("godavari_frames_total")
+            metrics.set_gauge("godavari_camera_frame_age_seconds",
+                              health_snapshot.get("frame_age_s") or 0.0,
+                              labels={"camera": self.cam["id"]})
+            quality = health_snapshot.get("quality") or {}
+            score = min(1.0, max(0.0, (float(quality.get("brightness") or 0) / 64.0 +
+                                       float(quality.get("contrast") or 0) / 32.0 +
+                                       float(quality.get("blur_score") or 0) / 100.0) / 3.0))
+            metrics.set_gauge("godavari_camera_quality_score", score,
+                              labels={"camera": self.cam["id"]})
             if frame.shape[1] > config.MAX_FRAME_WIDTH:
                 scale = config.MAX_FRAME_WIDTH / frame.shape[1]
                 frame = cv2.resize(frame, (config.MAX_FRAME_WIDTH,
@@ -306,7 +320,21 @@ class CameraWorker(threading.Thread):
         with self._data_lock:
             zones = list(self.zones)
 
-        # ---- density cross-check: advisory only, low rate, dense scenes ----
+        # ---- dense estimators: independent, rate-limited advisory paths ----
+        # They are never summed with detector boxes.  The router chooses a
+        # single promoted source only after a camera-specific validation gate.
+        if now - self._last_point_ts >= config.POINT_PERIOD_S:
+            self._last_point_ts = now
+            try:
+                self._point_result = self.registry.points.estimate(
+                    frame, [z.to_dict() for z in zones])
+                self._point_error = None
+            except RuntimeError as exc:
+                self._point_result = None
+                self._point_error = str(exc)
+            metrics.set_gauge("godavari_head_point_estimate",
+                              self._point_result.total_count if self._point_result else 0.0,
+                              labels={"camera": self.cam["id"]})
         if now - self._last_density_ts >= config.DENSITY_PERIOD_S:
             self._last_density_ts = now
             try:
@@ -328,18 +356,31 @@ class CameraWorker(threading.Thread):
         track_continuity = (n_tracks / len(boxes)) if len(boxes) else 1.0
         with self._data_lock:
             camera_health = self.frame_health.snapshot().get("status")
+        promoted_source = self.registry.calibrated_count_source(self.cam["id"])
+        # A camera-wide density total cannot safely drive zone capacities.  It
+        # remains a useful advisory estimate, but promotion waits until the
+        # backend exposes the density map needed to integrate each zone.
+        if (promoted_source == "density" and zones
+                and (self._density_result is None
+                     or self._density_result.density_map is None)):
+            promoted_source = "none"
         if config.MODE_ROUTER:
             route = self.router.route(
                 detection,
                 track_continuity=track_continuity,
                 density=self._density_result,
                 density_error=self._density_error,
+                points=self._point_result,
+                point_error=self._point_error,
                 camera_health=camera_health,
                 calibrated_density_enabled=config.CALIBRATED_DENSITY_ENABLED,
+                calibrated_count_source=promoted_source,
             )
         else:
             route = None
         self._route = route.to_dict() if route is not None else {}
+        metrics.set_gauge("godavari_detector_count", len(boxes),
+                          labels={"camera": self.cam["id"]})
         self.analytics_health.record_inference(len(boxes), now)
         analytics = self.analytics_health.evaluate(now=now, worker_status="running",
                                                    camera_health=camera_health)
@@ -361,7 +402,7 @@ class CameraWorker(threading.Thread):
         # Drop stale tracker IDs so a recycled ByteTrack ID cannot bridge an old route.
         self._track_zone = {tid: val for tid, val in self._track_zone.items()
                             if now - val[1] <= 30}
-        degraded_count = self._route.get("mode") in ("dense", "unknown")
+        degraded_count = bool(self._route.get("degraded"))
         if degraded_count and not self._was_degraded:
             # Do not carry sustain timers across a spell of untrusted counting.
             self.engine.reset()
@@ -404,7 +445,25 @@ class CameraWorker(threading.Thread):
             if self.calibration:
                 world_poly = np.asarray(zone.polygon, np.float32) * [w, h]
                 area_m2 = polygon_area_world(world_poly, self.calibration)
-            zone.apply_count(inside, area, area_m2)
+            # If a dense estimator has passed the camera's promotion gate,
+            # apply its own per-zone estimate.  Raw head points are scaled by
+            # the model's corrected total; density cells already integrate to
+            # people.  Otherwise keep the track count as the detector source.
+            zone_count = inside
+            source = self._route.get("count_source")
+            if source == "head_points_validated" and self._point_result is not None:
+                raw = max(1, self._point_result.raw_count)
+                point_count = self._point_result.zone_counts.get(zone.id)
+                if point_count is not None:
+                    zone_count = float(point_count) * self._point_result.total_count / raw
+            elif source == "density_validated" and self._density_result is not None:
+                density_count = self._density_result.zone_counts.get(zone.id)
+                if density_count is not None:
+                    zone_count = float(density_count)
+            zone.apply_count(zone_count, area, area_m2)
+            metrics.set_gauge("godavari_zone_occupancy_ratio",
+                              zone.occupancy_pct / 100.0,
+                              labels={"camera": self.cam["id"], "zone": zone.id})
             # A lower-bound count cannot justify a capacity breach: in degraded
             # modes the number is incomplete by construction, so the alert is
             # replaced by one advisory (see below) instead of a false breach.
@@ -427,6 +486,7 @@ class CameraWorker(threading.Thread):
                     "count_source": self._route.get("count_source"),
                     "detector_count": self._route.get("detector_count"),
                     "density_count": self._route.get("density_count"),
+                    "head_point_count": self._route.get("head_point_count"),
                     "model": (self._last_detection.model_name if self._last_detection else None),
                     "model_version": (self._last_detection.model_version if self._last_detection else None),
                 }
@@ -442,6 +502,11 @@ class CameraWorker(threading.Thread):
                 "density_per_10k": round(zone.density_per_10k, 1),
                 "density_m2": round(zone.density_m2, 2)
                 if zone.density_m2 is not None else None,
+                "detector_count": inside,
+                "head_point_count": (round(self._point_result.zone_counts.get(zone.id, 0), 1)
+                                     if self._point_result is not None else None),
+                "density_count": (round(self._density_result.zone_counts.get(zone.id, 0), 1)
+                                  if self._density_result is not None else None),
                 "level": zone.level,
                 "flow": [round(vx, 4), round(vy, 4)], "moving": moving,
             })
@@ -454,9 +519,11 @@ class CameraWorker(threading.Thread):
             self._maybe_dense_advisory(now, len(boxes), zones)
 
         total = int(len(boxes))
+        selected_total = self._route.get("selected_count")
+        operational_total = int(selected_total) if selected_total is not None else total
         self.total_count = total if self.total_count == 0 else self.total_count * 0.6 + total * 0.4
         cam_cap = sum(z.capacity for z in zones)
-        cam_occ = 100.0 * (total / cam_cap) if cam_cap else 0.0
+        cam_occ = 100.0 * (operational_total / cam_cap) if cam_cap else 0.0
         if zones:
             worst = max(zones, key=lambda z: SEVERITY[z.level])
             cam_level = worst.level
@@ -471,6 +538,7 @@ class CameraWorker(threading.Thread):
                 "infer_fps": self._rolling_infer_fps(),
                 "frames": self._frames_total,
                 "count": total,
+                "operational_count": operational_total,
                 "tracked_count": n_tracks,
                 "raw_detection_count": total,
                 "count_smooth": int(round(self.total_count)),
@@ -487,8 +555,9 @@ class CameraWorker(threading.Thread):
                 # --- improvement.md: explicit estimation state ------------
                 "estimation_mode": self._route.get("estimation_mode", "detector"),
                 "mode": self._route.get("mode"),
-                "selected_count": self._route.get("selected_count", total) if self._route else total,
+                "selected_count": selected_total if self._route else total,
                 "density_count": self._route.get("density_count"),
+                "head_point_count": self._route.get("head_point_count"),
                 "count_source": self._route.get("count_source", "detector"),
                 "count_confidence": self._route.get("confidence", "medium"),
                 "degraded": bool(self._route.get("degraded")),
@@ -497,9 +566,36 @@ class CameraWorker(threading.Thread):
                 # how the number was produced: plain pass or recovered detail tier
                 "tier": self._route.get("tier", "primary"),
                 "primary_count": self._route.get("primary_count"),
+                # Mean of two agreeing dense estimators, shown as ≈N. Still advisory.
+                "consensus_count": self._route.get("consensus_count"),
+                "estimator_spread_pct": self._route.get("estimator_spread_pct"),
                 "route_detail": self._route,
                 "analytics_health": analytics,
                 "detector": (detection.to_dict() if detection is not None else None),
+                "head_point_model": (self._point_result.model_name if self._point_result else None),
+                "head_point_model_version": (self._point_result.model_version if self._point_result else None),
+                "density_model": (self._density_result.model_name if self._density_result else None),
+                "density_model_version": (self._density_result.model_version if self._density_result else None),
+                # Both dense estimators report their own latency and zone
+                # counts, so an operator can see what the advisory cost and
+                # where it put people, not just the camera-wide total.
+                "estimators": {
+                    "head_points": (None if self._point_result is None else {
+                        "count": round(self._point_result.total_count, 1),
+                        "raw_count": self._point_result.raw_count,
+                        "zone_counts": self._point_result.zone_counts,
+                        "inference_ms": round(self._point_result.inference_ms, 1),
+                        "confidence": self._point_result.confidence,
+                    }),
+                    "density": (None if self._density_result is None else {
+                        "count": round(self._density_result.total_count, 1),
+                        "zone_counts": self._density_result.zone_counts,
+                        "inference_ms": round(self._density_result.inference_ms, 1),
+                        "confidence": self._density_result.confidence,
+                    }),
+                    "head_point_error": self._point_error,
+                    "density_error": self._density_error,
+                },
                 "zone_version": self.zone_version,
                 "throughput": self._throughput(now),
                 "count_lines": [{**line, **self.line_counts.get(line.get("id", line.get("name", "line")), {})}
@@ -553,12 +649,24 @@ class CameraWorker(threading.Thread):
         detail = self._route.get("detail") or {}
         primary = detail.get("primary_count")
         reason = self._route.get("reason") or "counting unreliable"
-        message = (f"Dense crowd: {total} people detected is a lower bound, not a "
-                   f"count ({reason})")
-        if primary is not None:
-            message += f"; full-frame pass saw {primary}. Manual observation required."
+        consensus = self._route.get("consensus_count")
+        head_points = self._route.get("head_point_count")
+        density = self._route.get("density_count")
+        if consensus is not None and head_points and density:
+            # Two independent models agree: an operator can act on ~N with the
+            # spread visible, instead of only being told the detector is low.
+            spread = self._route.get("estimator_spread_pct") or 0.0
+            message = (f"Dense crowd: about {consensus:.0f} people — PET {head_points:.0f} "
+                       f"and DM-Count {density:.0f} agree within {spread:.0f}%; body "
+                       f"detector saw {total}. Estimate, not a validated count — "
+                       "manual observation required.")
         else:
-            message += ". Manual observation required."
+            message = (f"Dense crowd: {total} people detected is a lower bound, not a "
+                       f"count ({reason})")
+            if primary is not None:
+                message += f"; full-frame pass saw {primary}. Manual observation required."
+            else:
+                message += ". Manual observation required."
         alert = {
             "id": uuid.uuid4().hex,
             "cam_id": self.cam["id"],
@@ -659,6 +767,13 @@ class CameraWorker(threading.Thread):
 
 def build_density_estimator():
     """Density is opt-in: an unvalidated checkpoint must not silently count."""
+    if config.DENSITY_BACKEND == "crowdshield":
+        try:
+            return CrowdShieldDensityEstimator(validated=config.DENSITY_VALIDATED)
+        except Exception as exc:  # noqa: BLE001 - detector operation continues
+            store.add_audit("density.load.failed", "system", "crowdshield",
+                            {"error": str(exc)})
+            return NullDensityEstimator()
     if not config.DENSITY_MODEL:
         return NullDensityEstimator()
     try:
@@ -668,6 +783,18 @@ def build_density_estimator():
         store.add_audit("density.load.failed", "system", config.DENSITY_MODEL,
                         {"error": str(exc)})
         return NullDensityEstimator()
+
+
+def build_point_estimator():
+    """Load the optional PET path without making detector startup depend on it."""
+    if config.POINT_BACKEND != "crowdshield":
+        return NullPointEstimator()
+    try:
+        return CrowdShieldPointEstimator(validated=config.POINT_MODEL_VALIDATED)
+    except Exception as exc:  # noqa: BLE001 - dense inference is an optional path
+        store.add_audit("points.load.failed", "system", "crowdshield",
+                        {"error": str(exc)})
+        return NullPointEstimator()
 
 
 class CameraRegistry:
@@ -680,6 +807,7 @@ class CameraRegistry:
         self.workers: dict[str, CameraWorker] = {}
         self.alerts: deque = deque(maxlen=200)
         self.density = build_density_estimator()
+        self.points = build_point_estimator()
         # Durable outbox: alerts survive restarts and long network outages.
         self.outbox = AlertOutbox()
         self.outbox.start()
@@ -687,6 +815,127 @@ class CameraRegistry:
         # meant an API call in those first seconds (add/delete/zone edit) saved a
         # registry that had not been restored yet, wiping cameras.json.
         self._load_config()
+
+    def calibrated_count_source(self, cam_id: str) -> str:
+        """Return an active, unexpired promotion only for this camera."""
+        with self._lock:
+            camera = self.cameras.get(cam_id) or {}
+            policy = camera.get("estimation_policy") or {}
+            validation = policy.get("validation") or {}
+            source = str(policy.get("selected_source") or "none")
+        if source not in {"head_point", "density"}:
+            return "none"
+        if not validation.get("approved") or float(validation.get("expires_at") or 0) < time.time():
+            return "none"
+        if source == "head_point" and not self.points.validated:
+            return "none"
+        if source == "density" and not self.density.validated:
+            return "none"
+        return source
+
+    def validation_summary(self, cam_id: str) -> dict:
+        with self._lock:
+            camera = self.cameras.get(cam_id)
+            if camera is None:
+                raise KeyError(cam_id)
+            policy = dict(camera.get("estimation_policy") or {})
+            samples = list(policy.get("samples") or [])
+            validation = dict(policy.get("validation") or {})
+        absolute = [abs(float(s["model_count"]) - float(s["manual_count"]))
+                    for s in samples]
+        relative = [error / max(1.0, float(s["manual_count"]))
+                    for error, s in zip(absolute, samples)]
+        return {
+            "selected_source": policy.get("selected_source", "none"),
+            "samples": len(samples),
+            "mae": round(sum(absolute) / len(absolute), 2) if absolute else None,
+            "mape": round(sum(relative) / len(relative), 4) if relative else None,
+            "approved": bool(validation.get("approved")),
+            "approved_by": validation.get("approved_by"),
+            "approved_at": validation.get("approved_at"),
+            "expires_at": validation.get("expires_at"),
+            "active_source": self.calibrated_count_source(cam_id),
+            "calibration_version": (camera.get("calibration") or {}).get("version"),
+        }
+
+    def add_validation_sample(self, cam_id: str, source: str,
+                              manual_count: float, model_count: float,
+                              recorded_by: str, note: str = "") -> dict:
+        if source not in {"head_point", "density"}:
+            raise ValueError("source must be head_point or density")
+        if min(manual_count, model_count) < 0:
+            raise ValueError("counts must be zero or greater")
+        with self._lock:
+            camera = self.cameras.get(cam_id)
+            if camera is None:
+                raise KeyError(cam_id)
+            policy = camera.setdefault("estimation_policy", {})
+            samples = policy.setdefault("samples", [])
+            samples.append({"source": source, "manual_count": float(manual_count),
+                            "model_count": float(model_count), "recorded_at": time.time(),
+                            "recorded_by": recorded_by[:60], "note": note[:240]})
+            # A new observation makes a prior sign-off stale until reviewed.
+            policy["validation"] = {"approved": False}
+            if len(samples) > 500:
+                del samples[:-500]
+        self.save()
+        summary = self.validation_summary(cam_id)
+        store.add_audit("estimation.validation.sample", recorded_by, cam_id,
+                        {"source": source, "manual_count": manual_count,
+                         "model_count": model_count, "samples": summary["samples"]})
+        return summary
+
+    def promote_estimation_source(self, cam_id: str, source: str,
+                                  approved_by: str) -> dict:
+        if source not in {"head_point", "density"}:
+            raise ValueError("source must be head_point or density")
+        with self._lock:
+            camera = self.cameras.get(cam_id)
+            if camera is None:
+                raise KeyError(cam_id)
+            if not camera.get("calibration"):
+                raise ValueError("ground-plane calibration is required before promotion")
+            policy = camera.setdefault("estimation_policy", {})
+            samples = [s for s in policy.get("samples", []) if s.get("source") == source]
+        if len(samples) < config.VALIDATION_MIN_SAMPLES:
+            raise ValueError(f"{config.VALIDATION_MIN_SAMPLES} validation samples are required")
+        errors = [abs(float(s["model_count"]) - float(s["manual_count"])) /
+                  max(1.0, float(s["manual_count"])) for s in samples]
+        mape = sum(errors) / len(errors)
+        if mape > config.VALIDATION_MAX_MAPE:
+            raise ValueError(f"validation MAPE {mape:.1%} exceeds {config.VALIDATION_MAX_MAPE:.1%}")
+        estimator = self.points if source == "head_point" else self.density
+        if not estimator.validated:
+            raise ValueError(f"{source} checkpoint is not enabled as validated on this node")
+        now = time.time()
+        with self._lock:
+            policy = camera.setdefault("estimation_policy", {})
+            policy["selected_source"] = source
+            policy["validation"] = {
+                "approved": True, "approved_by": approved_by[:60], "approved_at": now,
+                "expires_at": now + config.VALIDATION_TTL_DAYS * 86400,
+                "calibration_version": camera["calibration"].get("version"),
+                "sample_count": len(samples), "mape": round(mape, 4),
+            }
+        self.save()
+        summary = self.validation_summary(cam_id)
+        store.add_audit("estimation.validation.promote", approved_by, cam_id,
+                        {"source": source, **summary})
+        return summary
+
+    def revoke_estimation_source(self, cam_id: str, by: str, reason: str = "") -> dict:
+        with self._lock:
+            camera = self.cameras.get(cam_id)
+            if camera is None:
+                raise KeyError(cam_id)
+            policy = camera.setdefault("estimation_policy", {})
+            policy["selected_source"] = "none"
+            policy["validation"] = {"approved": False, "revoked_by": by[:60],
+                                    "revoked_at": time.time(), "reason": reason[:240]}
+        self.save()
+        summary = self.validation_summary(cam_id)
+        store.add_audit("estimation.validation.revoke", by, cam_id, {"reason": reason[:240]})
+        return summary
 
     # lifecycle ---------------------------------------------------------
     def add(self, cfg: dict, persist: bool = True):
@@ -821,6 +1070,7 @@ class CameraRegistry:
                 "count_lines": cam.get("count_lines", []),
                 "display": cam.get("display", {"detections": True}),
                 "profile": cam.get("profile", "global"),
+                "estimation_policy": self.validation_summary(cam_id),
                 "status": status,
                 "detail": (metrics_snapshot.get("detail") if metrics_snapshot else None),
                 "metrics": metrics_snapshot,

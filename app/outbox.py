@@ -1,7 +1,7 @@
 """Durable alert outbox.
 
-`app/delivery.py` fires a thread per alert with in-memory retries: a restart or
-an outage longer than the retry window loses the alert. At event scale that is
+The earlier dispatcher fired one thread per alert with in-memory retries: a
+restart or an outage longer than the retry window lost the alert. At event scale that is
 unacceptable -- an alert that was raised must still be delivered after the box
 reboots. This outbox persists every alert before delivery, retries with
 exponential backoff plus jitter, deduplicates on the alert id, and supports

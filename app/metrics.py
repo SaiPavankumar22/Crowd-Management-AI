@@ -43,7 +43,6 @@ def render() -> str:
     with _lock:
         counters = dict(_counters)
         gauges = dict(_gauges)
-        types = dict(_types)
     emitted: set[str] = set()
     for name, value in sorted(counters.items()):
         base = name.split("{", 1)[0]

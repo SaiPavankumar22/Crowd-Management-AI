@@ -39,11 +39,14 @@ def configure_logging():
         logger.propagate = True
 
 if __name__ == "__main__":
-    if os.environ.get("CROWD_LOG_JSON", "0").lower() in ("1", "true", "yes", "on"):
+    json_logs = os.environ.get("CROWD_LOG_JSON", "0").lower() in ("1", "true", "yes", "on")
+    if json_logs:
         configure_logging()
     uvicorn.run(
         "app.main:app",
         host=os.environ.get("HOST", "127.0.0.1"),
         port=int(os.environ.get("PORT", "8000")),
-        log_config=None if os.environ.get("CROWD_LOG_JSON", "0").lower() in ("1", "true", "yes", "on") else "default",
+        # uvicorn reads a str as a config *file*; pass the built-in dict instead,
+        # and skip its logging config entirely when our JSON formatter is active.
+        log_config=None if json_logs else uvicorn.config.LOGGING_CONFIG,
     )
