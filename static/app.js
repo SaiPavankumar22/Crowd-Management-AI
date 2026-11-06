@@ -27,7 +27,7 @@ const CAMERA_VIEWS = {
   areas:   { detections: false, zones: true, heatmap: false, flow: false, countLines: true },
   flow:    { detections: false, zones: false, heatmap: false, flow: true,  countLines: false },
 };
-const VIEW_KEYS = ["boxes", "actual", "heatmap", "areas", "flow"];
+const VIEW_KEYS = { "1": "boxes", "2": "actual", "3": "heatmap", "4": "areas", "5": "flow" };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -246,7 +246,7 @@ function bindUI() {
     if (e.key === "Escape") cancelDraw();
     else if (e.key === "Enter" && state.draw.active) finishZone();
     else if (e.key === "0") setMosaic(true);
-    else if (VIEW_KEYS.includes(e.key)) applyCameraView(VIEW_KEYS[Number(e.key) - 1]);
+    else if (VIEW_KEYS[e.key]) applyCameraView(VIEW_KEYS[e.key]);
   });
 
   document.body.addEventListener("click", initAudioOnce, { once: true });

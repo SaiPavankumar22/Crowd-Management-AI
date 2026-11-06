@@ -225,6 +225,20 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(row["closed_by"], "shift-lead")
         self.assertIsNotNone(row["closed_ts"])
 
+    def test_mongo_mirror_outbox_is_durable_and_preserves_document_order(self):
+        import app.store as store
+        store.mongo_enqueue("replace", "cameras", {"_id": "cam-1", "name": "old"})
+        store.mongo_enqueue("replace", "cameras", {"_id": "cam-1", "name": "new"})
+        store.mongo_enqueue("replace", "cameras", {"_id": "cam-2", "name": "other"})
+        due = store.mongo_due(time.time() + 1)
+        self.assertEqual([row["value"]["name"] for row in due], ["old", "other"])
+        store.mongo_retry(due[0]["id"], 1, "NetworkTimeout", time.time() + 60)
+        store.mongo_complete(due[1]["id"])
+        self.assertEqual(store.mongo_pending(), 2)
+        self.assertEqual(store.mongo_due(time.time() + 1), [])
+
+
+
     def test_zone_recovery_auto_closes_only_active_capacity_alerts(self):
         import app.store as store
         base = {"cam_id": "c1", "cam_name": "Gate", "zone": "North",
@@ -287,6 +301,17 @@ class OutboxTests(unittest.TestCase):
         row = outbox.ack("ackme", "supervisor")
         self.assertEqual(row["acked_by"], "supervisor")
         self.assertEqual(outbox.stats()["acked"], 1)
+
+
+class PrivacyTests(unittest.TestCase):
+    def test_camera_archive_scrubs_http_and_rtsp_source_credentials(self):
+        from app.mongo_sync import camera_document
+        doc = camera_document({"id": "c1", "name": "https://alice:secret@camera.local/feed",
+                              "source_type": "rtsp", "path": "rtsp://u:p@cam.local/live"})
+        self.assertNotIn("alice", doc["name"])
+        self.assertNotIn("secret", doc["name"])
+        self.assertNotIn("path", doc)
+        self.assertIn("[redacted]@camera.local", doc["name"])
 
 
 class FakeModel:

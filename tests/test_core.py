@@ -1,4 +1,5 @@
 import unittest
+from app.calibration import validate_calibration
 
 import numpy as np
 
@@ -49,6 +50,15 @@ class CalibrationTests(unittest.TestCase):
         })
         result = project_points([[5, 5]], calibration)
         np.testing.assert_allclose(result[0], [1, 1], atol=0.01)
+
+    def test_rejects_empty_and_non_finite_calibration(self):
+        with self.assertRaises(ValueError):
+            validate_calibration({})
+        with self.assertRaises(ValueError):
+            validate_calibration({
+                "image_points": [[0, 0], [10, 0], [10, 10], [0, 10]],
+                "world_points": [[0, 0], [2, 0], [float("nan"), 2], [0, 2]],
+            })
 
 
 if __name__ == "__main__":
