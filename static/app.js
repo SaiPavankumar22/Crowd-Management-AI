@@ -753,15 +753,22 @@ function recordHistory() {
 
   for (const cam of state.cameras) {
     const m = cam.metrics || {};
-    total += m.count || 0;
-    tracks += m.active_tracks || 0;
-    if (m.infer_fps) { fps += m.infer_fps; fpsN += 1; }
+    // The KPI row, the trend chart and the camera card must all read the same
+    // number: the consensus estimate when PET and DM-Count agree, otherwise
+    // the detector floor.  `m.count` alone is only the detector's number.
+    const shown = headlineCount(m).value;
+    const running = cam.status === "running";
+    total += shown;
+    if (running) {
+      tracks += m.active_tracks || 0;
+      if (m.infer_fps) { fps += m.infer_fps; fpsN += 1; }
+    }
     if (!state.hist.cams[cam.id]) state.hist.cams[cam.id] = [];
-    pushMax(state.hist.cams[cam.id], m.count || 0, 90);
+    pushMax(state.hist.cams[cam.id], shown, 90);
     for (const z of m.zones || []) {
       if (!state.hist.zones[z.id]) state.hist.zones[z.id] = [];
       pushMax(state.hist.zones[z.id], z.count || 0, 90);
-      if (LEVEL_ORDER[z.level] >= 2) risk += 1;
+      if (running && LEVEL_ORDER[z.level] >= 2) risk += 1;
     }
   }
   pushMax(state.hist.total, { t: now, v: total }, 300);

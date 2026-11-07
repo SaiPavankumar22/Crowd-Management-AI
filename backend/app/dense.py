@@ -74,6 +74,9 @@ def _pet():
             # Point both the default weights and correction at the shab
             # checkpoint this deployment actually ships.
             dense_points.WEIGHTS = verify(PET_WEIGHTS, PET_SHA256)
+            # The vendored loader verifies WEIGHTS against its own pinned hash;
+            # keep it in step with the checkpoint this deployment ships.
+            dense_points.WEIGHTS_SHA256 = PET_SHA256
             dense_points.CORRECTION = PET_CORRECTION
             _loaded["pet"] = dense_points.load_point_model()
         return _loaded["pet"]

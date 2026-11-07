@@ -46,6 +46,12 @@ def configure_logging():
         logger.propagate = True
 
 if __name__ == "__main__":
+    # Weights arrive through Git LFS; a clone without `git lfs pull` would fail
+    # later inside PyTorch with no hint about the cause.
+    from tools import preflight
+
+    if preflight.main() != 0:
+        sys.exit(2)
     json_logs = os.environ.get("CROWD_LOG_JSON", "0").lower() in ("1", "true", "yes", "on")
     if json_logs:
         configure_logging()

@@ -15,6 +15,14 @@ else
   PY="$VENV/bin/python"
 fi
 
+# Model weights live in Git LFS: without this the clone has tiny pointer files
+# and the app stops at startup telling the user to run `git lfs pull`.
+if git lfs version >/dev/null 2>&1; then
+  git lfs pull || echo "WARNING: git lfs pull failed; weights may still be pointers"
+else
+  echo "WARNING: git-lfs not installed; pull models/ weights manually (see README)"
+fi
+
 echo "== python: $PY =="
 "$PY" -m pip install --upgrade pip || exit 1
 # Single source of truth: pinned versions live in requirements.txt (the same

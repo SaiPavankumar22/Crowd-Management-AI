@@ -13,8 +13,9 @@ occupancy, dense-crowd estimates, and control-room alerts on one dashboard.
 ![Live dashboard: collapsible sidebar, five camera views, areas and gate lines, KPIs](docs/dashboard.png)
 
 [Quick start](#quick-start) · [Docker](#run-it-in-docker) · [Deployment](docs/DEPLOYMENT.md) ·
-[Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) · [Detectors](docs/DETECTORS.md) ·
-[Test footage](docs/FOOTAGE.md) · [Results report (PDF)](docs/RESULTS_REPORT.pdf)
+[Operator guide](docs/GUIDE.md) · [Scaling architecture](docs/PRODUCTION_ARCHITECTURE.md) ·
+[Detectors](docs/DETECTORS.md) · [Test footage](docs/FOOTAGE.md) ·
+[Results report (PDF)](docs/RESULTS_REPORT.pdf)
 
 ---
 
@@ -24,6 +25,7 @@ occupancy, dense-crowd estimates, and control-room alerts on one dashboard.
 - [What it does](#what-it-does)
 - [Tech stack](#tech-stack)
 - [Quick start](#quick-start)
+- [Fresh clone: what runs and what stays off](#fresh-clone-what-runs-and-what-stays-off)
 - [Run it in Docker](#run-it-in-docker)
 - [How it works](#how-it-works)
 - [Dense-crowd estimators](#dense-crowd-estimators-pet--dm-count)
@@ -31,6 +33,7 @@ occupancy, dense-crowd estimates, and control-room alerts on one dashboard.
 - [The dashboard](#the-dashboard)
 - [Zones, occupancy and alerts](#zones-occupancy-and-alerts)
 - [Performance and multi-camera limits](#performance-and-multi-camera-limits)
+- [Engine settings that pay off](#engine-settings-that-pay-off)
 - [Data and storage](#data-and-storage)
 - [Test footage](#test-footage)
 - [Deployment](#deployment)
@@ -80,6 +83,14 @@ Environment variables, detector switches and deployment knobs live in
 
 ## Quick start
 
+Model weights (detector, PET and DM-Count) are stored with Git LFS, so a plain
+clone leaves ~130-byte pointer files where the checkpoints should be. Pull them
+once after cloning, or the app stops at startup with a `git lfs pull` hint:
+
+```bash
+git lfs install && git lfs pull
+```
+
 Windows, from the project folder (everything — venv, uploads, clips, alert DB — stays on
 `D:`, nothing is written to the system drive):
 
@@ -98,11 +109,42 @@ bash backend/tools/start_dev.sh     # serves http://127.0.0.1:8000
 3. Watch the zone rail and the feed. A zone turns yellow → orange → red as it fills;
    sustained overload appears in the alert stream and fires a chime.
 
+Sample clips are not in the repository (footage licensing); `python
+backend/tools/fetch_footage.py` fetches a few, or upload your own `.mp4`.
+
 Linux/macOS: the same scripts work (`backend/tools/install.sh` creates `.venv/bin/python`).
+
+### Fresh clone: what runs and what stays off
+
+A clone that completed `install.sh` (or a Docker image built after `git lfs pull`)
+runs detector-only immediately — no database, no broker, no cloud account:
+
+| Included by default | Needs one decision from you |
+|---|---|
+| Detector, ByteTrack tracking, zones, gate lines, heatmap, alerts, dashboard, API | **PET + DM-Count:** installed but off — set `CROWD_POINT_BACKEND=dense` / `CROWD_DENSITY_BACKEND=dense` |
+| PyTorch: `install.sh` tries CUDA wheels and falls back to CPU; Docker builds CPU by default (`TORCH_INDEX_URL` for GPU) | **Model:** `yolo26n.pt` unless `CROWD_MODEL` says otherwise |
+| Weight preflight at startup and in the Docker build | **Areas, gate lines, calibration:** empty per camera until you draw them |
+| SQLite alert history in `data/crowd.db`, cameras in `data/cameras.json` | **Auth:** off; set `CROWD_AUTH_OPERATOR_TOKEN` / `CROWD_AUTH_VIEWER_TOKEN` to require tokens |
+| Loopback bind `127.0.0.1:8000` | **Sample clips:** not committed; fetch or upload your own |
+
+`backend/tools/preflight.py` is the guard behind that: it refuses to start when
+`models/` still holds Git LFS pointers or an enabled estimator's checkpoint is
+missing, and it prints the command that fixes it. A missing detector only warns,
+because Ultralytics can download it.
+
+Optional host packages: `ffmpeg` for codecs OpenCV cannot decode, and `git-lfs`
+for the weights. Everything else the app needs is pinned in `requirements.txt`.
+
+The full day-to-day manual — sources, engine tuning, drawing areas correctly,
+KPIs, alerts, validation, troubleshooting — is
+**[docs/GUIDE.md](docs/GUIDE.md)**.
 
 ---
 
 ## Run it in Docker
+
+Run `git lfs pull` before building. The image copies `models/` verbatim and the
+build stops with a clear message if those files are still LFS pointers.
 
 ```bash
 docker build -t godavari:cpu .                                  # CPU image, 0.67 GB
@@ -409,6 +451,31 @@ A note that matters more than FPS: box detectors **under-count dense crowds**. O
 test clips, YOLO26n finds 4 people in an aerial shot of tens of thousands at the Haram, and
 1–3 in an overhead railway-platform crush. That is why the roadmap below puts a head-point
 density model next to the detector rather than trusting counts alone.
+
+### Engine settings that pay off
+
+Everything below is an env var; the Engine panel only exposes the detection profile and the
+model picker, deliberately — the rest are deployment decisions, not control-room toggles.
+
+| Setting | Cheap / CPU | Balanced (small GPU) | Maximum detail (large GPU) |
+|---|---|---|---|
+| `CROWD_IMGSZ` | `640` | `640` | `640` global, `dense` profile on selected cameras (1280) |
+| `CROWD_TARGET_INFER_FPS` | `2`–`3` | `5`–`8` | `8`–`10` |
+| `CROWD_MAX_FRAME_WIDTH` | `960` | `1280` | `1280`–`1920` |
+| `CROWD_MAX_FRAME_AGE_MS` | `300` | `500` | `500` |
+| `CROWD_BATCH_SIZE` / `CROWD_MAX_BATCH_WAIT_MS` | `1` / `8` | `2` / `8` | `3`–`4` / `8`–`12` |
+| `CROWD_STREAM_FPS` / `CROWD_JPEG_QUALITY` | `8` / `55` | `12` / `65` | `12` / `65` |
+| PET + DM-Count | off | one, 5–6 s period | both, 5–6 s period |
+| Practical cameras | 2–4 | 4–6 | 10–20 |
+
+Two things to leave alone: `CROWD_TILING=auto` (tiles only when median box height drops under
+40 px) and `CROWD_DETAIL_PASS=1` (the escalation that turns a wrong `1` into `≥135`). Both
+spend compute only where people are small, and disabling them saves frame rate by producing
+the wrong number. If **Dropped frames** climbs in the Engine panel, cut
+`CROWD_MAX_FRAME_WIDTH` first.
+
+What each knob costs, the per-camera `balanced` / `dense` profiles, and how to tell whether
+the engine is keeping up: **[docs/GUIDE.md § Engine](docs/GUIDE.md#the-engine-panel-and-efficiency-presets)**.
 
 ---
 

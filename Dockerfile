@@ -65,6 +65,10 @@ COPY README.md ./
 # Local operator-supplied checkpoints (PET / DM-Count / optional detector .pt).
 COPY models ./models
 
+# Fail here, not inside PyTorch, when `git lfs pull` never ran: COPY above
+# would otherwise put 130-byte LFS pointer files in models/.
+RUN python backend/tools/preflight.py
+
 # Bake detector defaults so the container starts with no internet access. This is
 # a build-time download when the weight is not already present under models/.
 ARG WEIGHTS=yolo26n.pt
